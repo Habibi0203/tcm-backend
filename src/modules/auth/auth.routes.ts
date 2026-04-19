@@ -39,9 +39,15 @@ function setRefreshCookie(reply: Parameters<FastifyInstance['decorateReply']>[1]
 }
 
 export default async function authRoutes(fastify: FastifyInstance) {
+  // ── Per-endpoint rate limits (override global 200/min) ────────────────────
+  const loginRateLimit    = { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } };
+  const registerRateLimit = { config: { rateLimit: { max: 5,  timeWindow: '1 hour'     } } };
+  const forgotRateLimit   = { config: { rateLimit: { max: 3,  timeWindow: '1 hour'     } } };
+
   // ----- REGISTER -----
   fastify.post('/auth/register', {
     schema: { tags: ['auth'], summary: 'Register new user' },
+    ...registerRateLimit,
   }, async (request, reply) => {
     const parsed = registerSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -85,6 +91,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
   // ----- LOGIN -----
   fastify.post('/auth/login', {
     schema: { tags: ['auth'], summary: 'Login dengan email + password' },
+    ...loginRateLimit,
   }, async (request, reply) => {
     const parsed = loginSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -203,6 +210,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
   // ----- FORGOT PASSWORD -----
   fastify.post('/auth/forgot-password', {
     schema: { tags: ['auth'], summary: 'Trigger password-reset token' },
+    ...forgotRateLimit,
   }, async (request, reply) => {
     const parsed = forgotPasswordSchema.safeParse(request.body);
     if (!parsed.success) return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'Input tidak valid', 422);

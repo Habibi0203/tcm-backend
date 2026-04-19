@@ -5,6 +5,16 @@
 
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 
+/** Prevent HTML/XSS injection when interpolating user input into email HTML */
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export interface BrevoRecipient {
   email: string;
   name?: string;
@@ -93,10 +103,11 @@ function wrap(title: string, body: string): string {
 }
 
 export function buildWelcomeEmail(name: string): { subject: string; html: string } {
+  const safeName = escapeHtml(name);
   return {
-    subject: `Selamat datang di tcm.my.id, ${name}! 🌿`,
+    subject: `Selamat datang di tcm.my.id, ${safeName}! 🌿`,
     html: wrap('Selamat Datang', `
-      <h2 style="margin:0 0 12px;color:#3d2b1f;font-size:22px;">Selamat datang, ${name}!</h2>
+      <h2 style="margin:0 0 12px;color:#3d2b1f;font-size:22px;">Selamat datang, ${safeName}!</h2>
       <p style="color:#5c3d2e;line-height:1.7;margin:0 0 16px;">Akun Anda telah berhasil dibuat di <strong>tcm.my.id</strong> — komunitas Traditional Chinese Medicine Indonesia.</p>
       <p style="color:#5c3d2e;line-height:1.7;margin:0 0 24px;">Mulai jelajahi artikel, forum diskusi, dan konten eksklusif dari para praktisi TCM berpengalaman.</p>
       <div style="text-align:center;margin:24px 0;">
@@ -107,14 +118,16 @@ export function buildWelcomeEmail(name: string): { subject: string; html: string
 }
 
 export function buildResetPasswordEmail(name: string, resetUrl: string): { subject: string; html: string } {
+  const safeName = escapeHtml(name);
+  const safeUrl  = escapeHtml(resetUrl);
   return {
     subject: 'Reset Password — tcm.my.id 🔐',
     html: wrap('Reset Password', `
       <h2 style="margin:0 0 12px;color:#3d2b1f;font-size:22px;">Reset Password</h2>
-      <p style="color:#5c3d2e;line-height:1.7;margin:0 0 16px;">Halo <strong>${name}</strong>, kami menerima permintaan reset password untuk akun Anda.</p>
+      <p style="color:#5c3d2e;line-height:1.7;margin:0 0 16px;">Halo <strong>${safeName}</strong>, kami menerima permintaan reset password untuk akun Anda.</p>
       <p style="color:#5c3d2e;line-height:1.7;margin:0 0 24px;">Klik tombol berikut untuk membuat password baru. Tautan ini berlaku selama <strong>1 jam</strong>.</p>
       <div style="text-align:center;margin:24px 0;">
-        <a href="${resetUrl}" style="display:inline-block;background:#c9983a;color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:8px;font-weight:600;font-size:15px;">Reset Password</a>
+        <a href="${safeUrl}" style="display:inline-block;background:#c9983a;color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:8px;font-weight:600;font-size:15px;">Reset Password</a>
       </div>
       <div style="background:#fff8e6;border:1px solid #e8bc65;border-radius:8px;padding:14px 18px;margin-top:16px;">
         <p style="margin:0;font-size:13px;color:#8b5e3c;">⚠️ Jika Anda tidak meminta reset password, abaikan email ini. Password Anda tidak akan berubah.</p>

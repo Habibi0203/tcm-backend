@@ -75,14 +75,14 @@ export async function buildApp() {
   fastify.decorate('requirePremium', requirePremium);
   fastify.decorate('requireAgent',   requireAgent);
 
-  // ── Routes ────────────────────────────────────────────────────────────────
-  await fastify.register(healthRoutes);
-  await fastify.register(authRoutes);
-  await fastify.register(usersRoutes);
-  await fastify.register(articlesRoutes);
-  await fastify.register(forumRoutes);
-  await fastify.register(agentRoutes);
-  await fastify.register(adminRoutes);
+  // ── Routes (all under /api prefix to match frontend rewrites & nginx) ───
+  await fastify.register(healthRoutes,   { prefix: '/api' });
+  await fastify.register(authRoutes,     { prefix: '/api' });
+  await fastify.register(usersRoutes,    { prefix: '/api' });
+  await fastify.register(articlesRoutes, { prefix: '/api' });
+  await fastify.register(forumRoutes,    { prefix: '/api' });
+  await fastify.register(agentRoutes,    { prefix: '/api' });
+  await fastify.register(adminRoutes,    { prefix: '/api' });
 
   // ── Global error handler ──────────────────────────────────────────────────
   fastify.setErrorHandler((error, _request, reply) => {

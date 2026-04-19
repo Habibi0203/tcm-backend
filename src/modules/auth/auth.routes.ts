@@ -16,7 +16,7 @@ import {
 } from './auth.service';
 import { JWT_EXPIRY, REFRESH_COOKIE_NAME, REFRESH_COOKIE_MAX_AGE } from '../../utils/token';
 import { config } from '../../config';
-import { sendEmail, buildWelcomeEmail, buildResetPasswordEmail } from '../../lib/brevo';
+import { sendEmail, buildVerificationEmail, buildWelcomeEmail, buildResetPasswordEmail } from '../../lib/brevo';
 
 function signAccess(fastify: FastifyInstance, u: { id: string; email: string; username: string; role: string; membership_tier: string }) {
   return fastify.jwt.sign(
@@ -70,15 +70,16 @@ export default async function authRoutes(fastify: FastifyInstance) {
       fastify.log.info(`[DEV] Email verification token: ${token}`);
     }
 
-    // Send welcome email (fire-and-forget — don't block registration on email failure)
-    const welcome = buildWelcomeEmail(user.display_name);
+    // Send verification email (fire-and-forget — don't block registration on email failure)
+    const verifyUrl = `${config.APP_URL}/auth/verify-email?token=${encodeURIComponent(token)}`;
+    const verification = buildVerificationEmail(user.display_name, verifyUrl);
     sendEmail({
       to: [{ email: user.email, name: user.display_name }],
-      subject: welcome.subject,
-      htmlContent: welcome.html,
+      subject: verification.subject,
+      htmlContent: verification.html,
     })
-      .then((r) => { if (!r.ok) fastify.log.warn(`[brevo] welcome email failed: ${r.error}`); })
-      .catch((e: unknown) => fastify.log.warn(`[brevo] welcome email error: ${String(e)}`));
+      .then((r) => { if (!r.ok) fastify.log.warn(`[brevo] verification email failed: ${r.error}`); })
+      .catch((e: unknown) => fastify.log.warn(`[brevo] verification email error: ${String(e)}`));
 
     const payload = { id: user.id, email: user.email, username: user.username, role: user.role, membership_tier: user.membership_tier };
     const access_token = signAccess(fastify, payload);
@@ -110,7 +111,17 @@ export default async function authRoutes(fastify: FastifyInstance) {
       return sendError(reply, ErrorCodes.FORBIDDEN, 'Akun dinonaktifkan', 403);
     }
     if (!user.is_verified) {
-      return sendError(reply, ErrorCodes.FORBIDDEN, 'Email belum diverifikasi', 403);
+      const { token } = await createEmailVerification(user.id);
+      const verifyUrl = `${config.APP_URL}/auth/verify-email?token=${encodeURIComponent(token)}`;
+      const verification = buildVerificationEmail(user.display_name, verifyUrl);
+      sendEmail({
+        to: [{ email: user.email, name: user.display_name }],
+        subject: verification.subject,
+        htmlContent: verification.html,
+      })
+        .then((r) => { if (!r.ok) fastify.log.warn(`[brevo] verification resend failed: ${r.error}`); })
+        .catch((e: unknown) => fastify.log.warn(`[brevo] verification resend error: ${String(e)}`));
+      return sendError(reply, ErrorCodes.FORBIDDEN, 'Email belum diverifikasi. Email verifikasi baru telah dikirim.', 403);
     }
     const ok = await verifyPassword(user, password);
     if (!ok) {
@@ -189,25 +200,75 @@ export default async function authRoutes(fastify: FastifyInstance) {
   });
 
   // ----- VERIFY EMAIL -----
-  fastify.post('/auth/verify-email', {
-    schema: { tags: ['auth'], summary: 'Verify email by token' },
-  }, async (request, reply) => {
-    const parsed = verifyEmailSchema.safeParse(request.body);
-    if (!parsed.success) return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'Input tidak valid', 422);
+  async function consumeVerificationToken(token: string) {
     const rows = await db
       .select()
       .from(emailVerifications)
       .where(and(
-        eq(emailVerifications.token, parsed.data.token),
+        eq(emailVerifications.token, token),
         isNull(emailVerifications.used_at),
         gt(emailVerifications.expires_at, new Date()),
       ))
       .limit(1);
     const row = rows[0];
-    if (!row) return sendError(reply, ErrorCodes.NOT_FOUND, 'Token tidak valid atau kedaluwarsa', 404);
+    if (!row) return { ok: false as const };
 
     await setIsVerified(row.user_id);
     await db.update(emailVerifications).set({ used_at: new Date() }).where(eq(emailVerifications.id, row.id));
+    return { ok: true as const, userId: row.user_id };
+  }
+
+  fastify.get('/auth/verify-email', {
+    schema: { tags: ['auth'], summary: 'Verify email by token from email link' },
+  }, async (request, reply) => {
+    const token = typeof (request.query as { token?: unknown }).token === 'string'
+      ? (request.query as { token: string }).token
+      : '';
+
+    if (!token) {
+      return reply.redirect(`${config.FRONTEND_URL}/masuk?verified=0&reason=missing-token`);
+    }
+
+    const result = await consumeVerificationToken(token);
+    if (!result.ok) {
+      return reply.redirect(`${config.FRONTEND_URL}/masuk?verified=0&reason=invalid-token`);
+    }
+
+    const user = await findUserById(result.userId);
+    if (user) {
+      const welcome = buildWelcomeEmail(user.display_name);
+      sendEmail({
+        to: [{ email: user.email, name: user.display_name }],
+        subject: welcome.subject,
+        htmlContent: welcome.html,
+      })
+        .then((r) => { if (!r.ok) fastify.log.warn(`[brevo] welcome email failed: ${r.error}`); })
+        .catch((e: unknown) => fastify.log.warn(`[brevo] welcome email error: ${String(e)}`));
+    }
+
+    return reply.redirect(`${config.FRONTEND_URL}/masuk?verified=1`);
+  });
+
+  fastify.post('/auth/verify-email', {
+    schema: { tags: ['auth'], summary: 'Verify email by token' },
+  }, async (request, reply) => {
+    const parsed = verifyEmailSchema.safeParse(request.body);
+    if (!parsed.success) return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'Input tidak valid', 422);
+    const result = await consumeVerificationToken(parsed.data.token);
+    if (!result.ok) return sendError(reply, ErrorCodes.NOT_FOUND, 'Token tidak valid atau kedaluwarsa', 404);
+
+    const user = await findUserById(result.userId);
+    if (user) {
+      const welcome = buildWelcomeEmail(user.display_name);
+      sendEmail({
+        to: [{ email: user.email, name: user.display_name }],
+        subject: welcome.subject,
+        htmlContent: welcome.html,
+      })
+        .then((r) => { if (!r.ok) fastify.log.warn(`[brevo] welcome email failed: ${r.error}`); })
+        .catch((e: unknown) => fastify.log.warn(`[brevo] welcome email error: ${String(e)}`));
+    }
+
     return sendSuccess(reply, { message: 'Email berhasil diverifikasi' });
   });
 

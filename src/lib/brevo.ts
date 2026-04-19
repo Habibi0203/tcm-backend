@@ -102,6 +102,26 @@ function wrap(title: string, body: string): string {
 </body></html>`;
 }
 
+export function buildVerificationEmail(name: string, verifyUrl: string): { subject: string; html: string } {
+  const safeName = escapeHtml(name);
+  const safeUrl  = escapeHtml(verifyUrl);
+  return {
+    subject: 'Verifikasi Email — tcm.my.id ✉️',
+    html: wrap('Verifikasi Email', `
+      <h2 style="margin:0 0 12px;color:#3d2b1f;font-size:22px;">Verifikasi Email Anda</h2>
+      <p style="color:#5c3d2e;line-height:1.7;margin:0 0 16px;">Halo <strong>${safeName}</strong>, terima kasih sudah mendaftar di <strong>tcm.my.id</strong>.</p>
+      <p style="color:#5c3d2e;line-height:1.7;margin:0 0 24px;">Sebelum login, mohon verifikasi alamat email Anda dengan menekan tombol berikut.</p>
+      <div style="text-align:center;margin:24px 0;">
+        <a href="${safeUrl}" style="display:inline-block;background:#4a6741;color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:8px;font-weight:600;font-size:15px;">Verifikasi Email</a>
+      </div>
+      <div style="background:#fff8e6;border:1px solid #e8bc65;border-radius:8px;padding:14px 18px;margin-top:16px;">
+        <p style="margin:0;font-size:13px;color:#8b5e3c;">Jika tombol tidak bekerja, salin dan buka tautan ini di browser:</p>
+        <p style="margin:8px 0 0;font-size:12px;word-break:break-all;color:#5c3d2e;">${safeUrl}</p>
+      </div>
+    `),
+  };
+}
+
 export function buildWelcomeEmail(name: string): { subject: string; html: string } {
   const safeName = escapeHtml(name);
   return {

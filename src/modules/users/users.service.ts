@@ -3,6 +3,7 @@ import { db } from '../../db/client';
 import { users } from '../../db/schema/users';
 import { bookmarks, notifications } from '../../db/schema/system';
 import { articles, categories } from '../../db/schema/content';
+import { forumThreads, subforums } from '../../db/schema/forum';
 import { hashPassword } from '../../utils/hash';
 import type { UpdateMeInput } from './users.schema';
 
@@ -27,6 +28,61 @@ export async function findPublicUserByUsername(username: string) {
     .where(eq(users.username, username.toLowerCase()))
     .limit(1);
   return rows[0] ?? null;
+}
+
+export async function listPublicThreadsByUsername(username: string, limit = 20) {
+  const rows = await db
+    .select({
+      id: forumThreads.id,
+      title: forumThreads.title,
+      created_at: forumThreads.created_at,
+      is_pinned: forumThreads.is_pinned,
+      is_locked: forumThreads.is_locked,
+      reply_count: forumThreads.reply_count,
+      author_id: users.id,
+      author_username: users.username,
+      author_display: users.display_name,
+      author_avatar: users.avatar_url,
+      author_role: users.role,
+      author_tier: users.membership_tier,
+      author_verified: users.is_verified,
+      subforum_id: subforums.id,
+      subforum_name: subforums.name,
+      subforum_slug: subforums.slug,
+    })
+    .from(forumThreads)
+    .innerJoin(users, eq(forumThreads.author_id, users.id))
+    .innerJoin(subforums, eq(forumThreads.subforum_id, subforums.id))
+    .where(and(
+      eq(users.username, username.toLowerCase()),
+      eq(users.is_active, true),
+      eq(forumThreads.is_deleted, false),
+    ))
+    .orderBy(desc(forumThreads.is_pinned), desc(forumThreads.created_at))
+    .limit(limit);
+
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    created_at: r.created_at.toISOString(),
+    is_pinned: r.is_pinned,
+    is_locked: r.is_locked,
+    reply_count: r.reply_count,
+    subforum: {
+      id: r.subforum_id,
+      name: r.subforum_name,
+      slug: r.subforum_slug,
+    },
+    author: r.author_id ? {
+      id: r.author_id,
+      username: r.author_username!,
+      display_name: r.author_display!,
+      avatar_url: r.author_avatar,
+      role: r.author_role!,
+      membership_tier: r.author_tier,
+      is_verified: r.author_verified,
+    } : null,
+  }));
 }
 
 // --- Bookmarks ---

@@ -9,7 +9,7 @@ import {
   updateMeSchema, changePasswordSchema,
 } from './users.schema';
 import {
-  updateMe, changePassword, findPublicUserByUsername,
+  updateMe, changePassword, findPublicUserByUsername, listPublicThreadsByUsername,
   listBookmarks, addBookmark, removeBookmark,
   listNotifications, markAllNotificationsRead, markNotificationRead,
 } from './users.service';
@@ -62,6 +62,18 @@ export default async function usersRoutes(fastify: FastifyInstance) {
     return sendSuccess(reply, { message: 'Password berhasil diubah' });
   });
 
+  // ----- GET /users/:username/threads -----
+  fastify.get<{ Params: { username: string } }>('/users/:username/threads', {
+    schema: { tags: ['users'], summary: 'Public threads by user' },
+  }, async (request, reply) => {
+    const user = await findPublicUserByUsername(request.params.username);
+    if (!user || !user.is_active) {
+      return sendError(reply, ErrorCodes.NOT_FOUND, 'User tidak ditemukan', 404);
+    }
+    const threads = await listPublicThreadsByUsername(request.params.username);
+    return sendSuccess(reply, threads);
+  });
+
   // ----- GET /users/:username -----
   fastify.get<{ Params: { username: string } }>('/users/:username', {
     schema: { tags: ['users'], summary: 'Public user profile' },
@@ -80,6 +92,8 @@ export default async function usersRoutes(fastify: FastifyInstance) {
       profession:   user.profession ?? 'general',
       role:         user.role,
       membership_tier: user.membership_tier,
+      is_verified:  user.is_verified,
+      is_active:    user.is_active,
       created_at:   user.created_at.toISOString(),
     });
   });

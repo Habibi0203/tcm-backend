@@ -15,6 +15,9 @@ const schema = z.object({
   GOOGLE_CLIENT_SECRET:  z.string().optional().default(''),
   GOOGLE_CALLBACK_URL:   z.string().default('http://localhost:3001/auth/google/callback'),
   AGENT_API_KEY:         z.string().min(8),
+  BREVO_API_KEY:         z.string().optional().default(''),
+  BREVO_SENDER_EMAIL:    z.string().optional().default(''),
+  BREVO_SENDER_NAME:     z.string().optional().default('TCM Indonesia'),
 });
 
 const parsed = schema.safeParse(process.env);

@@ -16,6 +16,7 @@ import {
 } from './auth.service';
 import { JWT_EXPIRY, REFRESH_COOKIE_NAME, REFRESH_COOKIE_MAX_AGE } from '../../utils/token';
 import { config } from '../../config';
+import { sendEmail, buildWelcomeEmail, buildResetPasswordEmail } from '../../lib/brevo';
 
 function signAccess(fastify: FastifyInstance, u: { id: string; email: string; username: string; role: string; membership_tier: string }) {
   return fastify.jwt.sign(
@@ -62,6 +63,12 @@ export default async function authRoutes(fastify: FastifyInstance) {
     if (config.NODE_ENV !== 'production') {
       fastify.log.info(`[DEV] Email verification token: ${token}`);
     }
+
+    // Send welcome email (fire-and-forget — don't block registration on email failure)
+    const welcome = buildWelcomeEmail(user.display_name);
+    sendEmail({ to: [{ email: user.email, name: user.display_name }], ...welcome })
+      .then((r) => { if (!r.ok) fastify.log.warn(`[brevo] welcome email failed: ${r.error}`); })
+      .catch((e: unknown) => fastify.log.warn(`[brevo] welcome email error: ${String(e)}`));
 
     const payload = { id: user.id, email: user.email, username: user.username, role: user.role, membership_tier: user.membership_tier };
     const access_token = signAccess(fastify, payload);
@@ -205,6 +212,14 @@ export default async function authRoutes(fastify: FastifyInstance) {
       if (config.NODE_ENV !== 'production') {
         fastify.log.info(`[DEV] Password reset token: ${token}`);
       }
+
+      // Send reset-password email (fire-and-forget)
+      const frontendUrl = config.FRONTEND_URL ?? 'https://tcm.my.id';
+      const resetUrl    = `${frontendUrl}/reset-password?token=${token}`;
+      const resetEmail  = buildResetPasswordEmail(user.display_name, resetUrl);
+      sendEmail({ to: [{ email: user.email, name: user.display_name }], ...resetEmail })
+        .then((r) => { if (!r.ok) fastify.log.warn(`[brevo] reset email failed: ${r.error}`); })
+        .catch((e: unknown) => fastify.log.warn(`[brevo] reset email error: ${String(e)}`));
     }
     return sendSuccess(reply, { message: 'Jika email terdaftar, instruksi reset telah dikirim' });
   });

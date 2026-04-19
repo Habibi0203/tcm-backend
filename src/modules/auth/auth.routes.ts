@@ -72,7 +72,11 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
     // Send welcome email (fire-and-forget — don't block registration on email failure)
     const welcome = buildWelcomeEmail(user.display_name);
-    sendEmail({ to: [{ email: user.email, name: user.display_name }], ...welcome })
+    sendEmail({
+      to: [{ email: user.email, name: user.display_name }],
+      subject: welcome.subject,
+      htmlContent: welcome.html,
+    })
       .then((r) => { if (!r.ok) fastify.log.warn(`[brevo] welcome email failed: ${r.error}`); })
       .catch((e: unknown) => fastify.log.warn(`[brevo] welcome email error: ${String(e)}`));
 
@@ -225,7 +229,11 @@ export default async function authRoutes(fastify: FastifyInstance) {
       const frontendUrl = config.FRONTEND_URL ?? 'https://tcm.my.id';
       const resetUrl    = `${frontendUrl}/reset-password?token=${token}`;
       const resetEmail  = buildResetPasswordEmail(user.display_name, resetUrl);
-      sendEmail({ to: [{ email: user.email, name: user.display_name }], ...resetEmail })
+      sendEmail({
+        to: [{ email: user.email, name: user.display_name }],
+        subject: resetEmail.subject,
+        htmlContent: resetEmail.html,
+      })
         .then((r) => { if (!r.ok) fastify.log.warn(`[brevo] reset email failed: ${r.error}`); })
         .catch((e: unknown) => fastify.log.warn(`[brevo] reset email error: ${String(e)}`));
     }

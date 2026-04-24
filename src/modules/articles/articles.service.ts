@@ -83,6 +83,7 @@ export async function listPublishedArticles(q: ListArticlesQuery) {
     sql`${articles.deleted_at} IS NULL`,
   ];
   if (q.access_tier) conds.push(eq(articles.access_tier, q.access_tier));
+  if (q.slug) conds.push(eq(articles.slug, q.slug));
   if (q.category_slug) {
     conds.push(eq(categories.slug, q.category_slug));
   }

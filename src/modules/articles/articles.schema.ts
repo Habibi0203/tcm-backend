@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const listArticlesQuerySchema = z.object({
   q:             z.string().trim().max(200).optional(),
+  slug:          z.string().trim().max(300).optional(),
   category_slug: z.string().trim().max(120).optional(),
   access_tier:   z.enum(['free', 'premium']).optional(),
   sort:          z.enum(['newest', 'popular', 'trending']).default('newest'),

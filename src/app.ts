@@ -34,6 +34,9 @@ export async function buildApp() {
         : undefined,
     },
     trustProxy: true,
+    // Some published article slugs are already >100 chars. Fastify's router defaults to 100,
+    // which makes valid long-slug detail pages fall through to the global 404 handler.
+    maxParamLength: 300,
   });
 
   // ── Plugins ──────────────────────────────────────────────────────────────

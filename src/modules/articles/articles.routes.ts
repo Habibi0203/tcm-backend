@@ -47,8 +47,8 @@ export default async function articlesRoutes(fastify: FastifyInstance) {
     const detail = await getArticleDetail(request.params.slug, viewer);
     if (!detail) return sendError(reply, ErrorCodes.NOT_FOUND, 'Artikel tidak ditemukan', 404);
     if (detail.status !== 'published') {
-      // Non-published only visible to author/admin/mod
-      const isPrivileged = viewer && (viewer.role === 'admin' || viewer.role === 'moderator' || detail.author?.id === viewer.id);
+      // Non-published only visible to author/admin/mod/agent
+      const isPrivileged = viewer && (viewer.role === 'admin' || viewer.role === 'moderator' || viewer.role === 'agent' || detail.author?.id === viewer.id);
       if (!isPrivileged) return sendError(reply, ErrorCodes.NOT_FOUND, 'Artikel tidak ditemukan', 404);
     }
     // Fire-and-forget view increment

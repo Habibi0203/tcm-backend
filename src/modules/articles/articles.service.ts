@@ -401,6 +401,6 @@ export async function unlikeComment(commentId: string, userId: string) {
 }
 
 export function canEditArticle(article: Article, actor: { id: string; role: string }) {
-  if (actor.role === 'admin' || actor.role === 'moderator') return true;
+  if (actor.role === 'admin' || actor.role === 'moderator' || actor.role === 'agent') return true;
   return article.author_id === actor.id;
 }

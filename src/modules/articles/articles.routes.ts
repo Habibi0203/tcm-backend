@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../../db/client';
-import { articles } from '../../db/schema/content';
+import { articles, categories } from '../../db/schema/content';
 import { sendSuccess, sendError, ErrorCodes } from '../../utils/response';
 import { buildMeta } from '../../utils/paginate';
 import {
@@ -36,6 +36,36 @@ export default async function articlesRoutes(fastify: FastifyInstance) {
     const q = parsed.data;
     const { rows, total } = await listPublishedArticles(q);
     return sendSuccess(reply, rows, buildMeta(total, q.page, q.per_page));
+  });
+
+  // ----- GET /articles/categories -----
+  fastify.get('/articles/categories', {
+    schema: { tags: ['articles'], summary: 'List active article categories' },
+  }, async (_request, reply) => {
+    const rows = await db
+      .select({
+        id: categories.id,
+        name: categories.name,
+        slug: categories.slug,
+        description: categories.description,
+        color_hex: categories.color_hex,
+        sort_order: categories.sort_order,
+        article_count: sql<number>`count(${articles.id})::int`,
+      })
+      .from(categories)
+      .leftJoin(
+        articles,
+        and(
+          eq(articles.category_id, categories.id),
+          eq(articles.status, 'published'),
+          sql`${articles.deleted_at} IS NULL`,
+        ),
+      )
+      .where(eq(categories.is_active, true))
+      .groupBy(categories.id)
+      .orderBy(categories.sort_order, categories.name);
+
+    return sendSuccess(reply, rows);
   });
 
   // ----- GET /articles/:slug -----

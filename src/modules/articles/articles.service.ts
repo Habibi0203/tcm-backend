@@ -84,6 +84,7 @@ export async function listPublishedArticles(q: ListArticlesQuery) {
   ];
   if (q.access_tier) conds.push(eq(articles.access_tier, q.access_tier));
   if (q.slug) conds.push(eq(articles.slug, q.slug));
+  if (q.author) conds.push(eq(articles.author_id, q.author));
   if (q.category_slug) {
     conds.push(eq(categories.slug, q.category_slug));
   }

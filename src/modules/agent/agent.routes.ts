@@ -13,7 +13,16 @@ import { createArticle, updateArticle } from '../articles/articles.service';
 import { createThread, createReply, activeMembersSince } from '../forum/forum.service';
 import { createNotification } from '../users/users.service';
 
-async function findAgentUser() {
+async function findAgentUser(username?: string) {
+  if (username) {
+    const rows = await db
+      .select()
+      .from(users)
+      .where(and(eq(users.role, 'agent'), eq(users.username, username.toLowerCase())))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
   const rows = await db.select().from(users).where(eq(users.role, 'agent')).limit(1);
   return rows[0] ?? null;
 }
@@ -32,14 +41,17 @@ export default async function agentRoutes(fastify: FastifyInstance) {
       for (const i of parsed.error.issues) fields[i.path.join('.') || '_'] = i.message;
       return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'Input tidak valid', 422, fields);
     }
-    const agent = await findAgentUser();
-    if (!agent) return sendError(reply, ErrorCodes.INTERNAL_ERROR, 'Agent user tidak dikonfigurasi', 500);
+    const agent = await findAgentUser(parsed.data.author_username);
+    if (!agent) {
+      return sendError(reply, ErrorCodes.NOT_FOUND, 'Author agent tidak ditemukan', 404);
+    }
 
     const [cat] = await db.select().from(categories).where(eq(categories.slug, parsed.data.category_slug)).limit(1);
     if (!cat) return sendError(reply, ErrorCodes.NOT_FOUND, 'Kategori tidak ditemukan', 404);
 
-    const { category_slug, ...rest } = parsed.data;
+    const { category_slug, author_username, ...rest } = parsed.data;
     void category_slug;
+    void author_username;
     const row = await createArticle({
       ...rest,
       category_id: cat.id,

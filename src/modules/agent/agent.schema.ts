@@ -5,6 +5,7 @@ export const agentCreateArticleSchema = z.object({
   excerpt:         z.string().max(500).optional(),
   content:         z.string().min(20),
   category_slug:   z.string().min(1),
+  author_username: z.string().trim().min(1).max(50).optional(),
   access_tier:     z.enum(['free', 'premium']).default('free'),
   thumbnail_url:   z.string().url().nullable().optional(),
   has_disclaimer:  z.boolean().optional(),

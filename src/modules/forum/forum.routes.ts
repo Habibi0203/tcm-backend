@@ -178,7 +178,7 @@ export default async function forumRoutes(fastify: FastifyInstance) {
         type:    'new_reply',
         title:   'Balasan baru di thread Anda',
         body:    `${u.username} membalas "${t.title}"`,
-        link:    `/forum/threads/${t.id}`,
+        link:    sf ? `/forum/${sf.slug}/${t.id}` : `/forum/${t.id}`,
       }).catch(() => undefined);
     }
 
@@ -187,7 +187,17 @@ export default async function forumRoutes(fastify: FastifyInstance) {
       thread_id: res.row.thread_id,
       parent_reply_id: res.row.parent_reply_id,
       content: res.row.content,
+      upvote_count: res.row.upvote_count,
       created_at: res.row.created_at.toISOString(),
+      author: {
+        id: u.id,
+        username: u.username,
+        display_name: u.username,
+        avatar_url: null,
+        role: u.role,
+        membership_tier: u.membership_tier,
+        is_verified: false,
+      },
     }, undefined, 201);
   });
 

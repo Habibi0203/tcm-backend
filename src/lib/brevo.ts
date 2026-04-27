@@ -129,7 +129,7 @@ export function buildWelcomeEmail(name: string): { subject: string; html: string
     html: wrap('Selamat Datang', `
       <h2 style="margin:0 0 12px;color:#3d2b1f;font-size:22px;">Selamat datang, ${safeName}!</h2>
       <p style="color:#5c3d2e;line-height:1.7;margin:0 0 16px;">Akun Anda telah berhasil dibuat di <strong>tcm.my.id</strong> — komunitas Traditional Chinese Medicine Indonesia.</p>
-      <p style="color:#5c3d2e;line-height:1.7;margin:0 0 24px;">Mulai jelajahi artikel, forum diskusi, dan konten eksklusif dari para praktisi TCM berpengalaman.</p>
+      <p style="color:#5c3d2e;line-height:1.7;margin:0 0 24px;">Mulai jelajahi artikel, ruang diskusi komunitas, dan konten edukatif yang terus kami kembangkan.</p>
       <div style="text-align:center;margin:24px 0;">
         <a href="https://tcm.my.id/dashboard" style="display:inline-block;background:#4a6741;color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:8px;font-weight:600;font-size:15px;">Mulai Eksplorasi →</a>
       </div>

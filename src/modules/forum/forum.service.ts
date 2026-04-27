@@ -52,13 +52,18 @@ export async function listThreads(subforumId: string, q: ListThreadsQuery) {
       reply_count:     forumThreads.reply_count,
       last_reply_at:   forumThreads.last_reply_at,
       created_at:      forumThreads.created_at,
+      subforum_name:   subforums.name,
+      subforum_slug:   subforums.slug,
       author_id:       users.id,
       author_username: users.username,
       author_display:  users.display_name,
       author_avatar:   users.avatar_url,
       author_role:     users.role,
+      author_tier:     users.membership_tier,
+      author_verified: users.is_verified,
     })
     .from(forumThreads)
+    .innerJoin(subforums, eq(forumThreads.subforum_id, subforums.id))
     .leftJoin(users, eq(forumThreads.author_id, users.id))
     .where(and(eq(forumThreads.subforum_id, subforumId), eq(forumThreads.is_deleted, false)))
     .orderBy(desc(forumThreads.is_pinned), orderBy)
@@ -76,6 +81,11 @@ export async function listThreads(subforumId: string, q: ListThreadsQuery) {
       subforum_id:     r.subforum_id,
       title:           r.title,
       excerpt:         (r.content ?? '').slice(0, 200),
+      subforum: {
+        id:   r.subforum_id,
+        name: r.subforum_name,
+        slug: r.subforum_slug,
+      },
       is_pinned:       r.is_pinned,
       is_locked:       r.is_locked,
       is_agent_seeded: r.is_agent_seeded,
@@ -89,6 +99,8 @@ export async function listThreads(subforumId: string, q: ListThreadsQuery) {
         display_name: r.author_display!,
         avatar_url:   r.author_avatar,
         role:         r.author_role!,
+        membership_tier: r.author_tier!,
+        is_verified:  r.author_verified,
       },
     })),
     total: count,
@@ -99,16 +111,24 @@ export async function getThreadById(id: string) {
   const rows = await db
     .select({
       t: forumThreads,
+      subforum: {
+        id:   subforums.id,
+        name: subforums.name,
+        slug: subforums.slug,
+      },
       author: {
         id:           users.id,
         username:     users.username,
         display_name: users.display_name,
         avatar_url:   users.avatar_url,
         role:         users.role,
+        membership_tier: users.membership_tier,
+        is_verified:  users.is_verified,
         profession:   users.profession,
       },
     })
     .from(forumThreads)
+    .innerJoin(subforums, eq(forumThreads.subforum_id, subforums.id))
     .leftJoin(users, eq(forumThreads.author_id, users.id))
     .where(and(eq(forumThreads.id, id), eq(forumThreads.is_deleted, false)))
     .limit(1);
@@ -128,6 +148,7 @@ export async function getThreadById(id: string) {
     last_reply_at:   row.t.last_reply_at ? row.t.last_reply_at.toISOString() : null,
     created_at:      row.t.created_at.toISOString(),
     updated_at:      row.t.updated_at.toISOString(),
+    subforum:        row.subforum,
     author:          row.author,
     author_id:       row.t.author_id,
   };
@@ -153,6 +174,8 @@ export async function listReplies(threadId: string) {
       author_display:  users.display_name,
       author_avatar:   users.avatar_url,
       author_role:     users.role,
+      author_tier:     users.membership_tier,
+      author_verified: users.is_verified,
       author_prof:     users.profession,
     })
     .from(forumReplies)
@@ -174,6 +197,8 @@ export async function listReplies(threadId: string) {
       display_name: r.author_display!,
       avatar_url:   r.author_avatar,
       role:         r.author_role!,
+      membership_tier: r.author_tier!,
+      is_verified:  r.author_verified,
       profession:   r.author_prof,
     },
   }));

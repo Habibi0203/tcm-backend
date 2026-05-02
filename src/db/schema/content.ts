@@ -42,7 +42,7 @@ export const articles = pgTable('articles', {
   access_tier:       accessTierEnum('access_tier').default('free').notNull(),
   thumbnail_url:     text('thumbnail_url'),
   read_time_minutes: integer('read_time_minutes'),
-  has_disclaimer:    boolean('has_disclaimer').default(false),
+  has_disclaimer:    boolean('has_disclaimer').default(true),
   seo_title:         varchar('seo_title', { length: 200 }),
   seo_description:   text('seo_description'),
   view_count:        integer('view_count').default(0).notNull(),

@@ -251,7 +251,7 @@ export async function createArticle(input: CreateArticleInput & { author_id: str
     access_tier:       input.access_tier ?? 'free',
     thumbnail_url:     input.thumbnail_url ?? null,
     read_time_minutes,
-    has_disclaimer:    input.has_disclaimer ?? false,
+    has_disclaimer:    input.has_disclaimer ?? true,
     seo_title:         input.seo_title ?? null,
     seo_description:   input.seo_description ?? null,
     published_at:      input.status === 'published' ? new Date() : null,

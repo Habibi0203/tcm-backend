@@ -18,3 +18,10 @@ export const createReplySchema = z.object({
   parent_reply_id: z.string().uuid().nullable().optional(),
 });
 export type CreateReplyInput = z.infer<typeof createReplySchema>;
+
+
+export const createReportSchema = z.object({
+  reason: z.enum(['medical_claim', 'spam', 'fraud', 'harassment', 'illegal_product', 'privacy', 'other']),
+  details: z.string().trim().max(1000).optional(),
+});
+export type CreateReportInput = z.infer<typeof createReportSchema>;

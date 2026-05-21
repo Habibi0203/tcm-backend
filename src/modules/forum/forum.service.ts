@@ -1,8 +1,8 @@
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { db } from '../../db/client';
-import { subforums, forumThreads, forumReplies, forumReplyUpvotes, postingRateLimits } from '../../db/schema/forum';
+import { subforums, forumThreads, forumReplies, forumReplyUpvotes, postingRateLimits, contentReports } from '../../db/schema/forum';
 import { users } from '../../db/schema/users';
-import type { CreateThreadInput, ListThreadsQuery } from './forum.schema';
+import type { CreateThreadInput, ListThreadsQuery, CreateReportInput } from './forum.schema';
 
 export async function listSubforums() {
   const rows = await db
@@ -205,7 +205,7 @@ export async function listReplies(threadId: string) {
 }
 
 // --- Rate-limit (hour-window via postingRateLimits) ---
-export async function checkAndTickRateLimit(userId: string, actionType: 'thread' | 'reply', maxPerHour: number) {
+export async function checkAndTickRateLimit(userId: string, actionType: 'thread' | 'reply' | 'report', maxPerHour: number) {
   const now = new Date();
   const hourAgo = new Date(now.getTime() - 60 * 60 * 1000);
 
@@ -326,4 +326,46 @@ export async function activeMembersSince(hours: number) {
     .from(users)
     .where(gte(users.last_login_at, since));
   return count;
+}
+
+
+export async function getReplyById(id: string) {
+  const rows = await db
+    .select({ id: forumReplies.id, thread_id: forumReplies.thread_id, is_deleted: forumReplies.is_deleted })
+    .from(forumReplies)
+    .where(and(eq(forumReplies.id, id), eq(forumReplies.is_deleted, false)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function createContentReport(opts: {
+  reporter_id: string;
+  target_type: 'thread' | 'reply';
+  target_id: string;
+  input: CreateReportInput;
+}) {
+  const [row] = await db
+    .insert(contentReports)
+    .values({
+      reporter_id: opts.reporter_id,
+      target_type: opts.target_type,
+      target_id:   opts.target_id,
+      reason:      opts.input.reason,
+      details:     opts.input.details?.trim() || null,
+    })
+    .onConflictDoNothing()
+    .returning();
+
+  if (!row) return { ok: false as const, code: 'DUPLICATE_REPORT' as const };
+
+  if (opts.target_type === 'thread') {
+    await db.update(forumThreads).set({ is_flagged: true, updated_at: new Date() }).where(eq(forumThreads.id, opts.target_id));
+  } else {
+    const reply = await getReplyById(opts.target_id);
+    if (reply) {
+      await db.update(forumThreads).set({ is_flagged: true, updated_at: new Date() }).where(eq(forumThreads.id, reply.thread_id));
+    }
+  }
+
+  return { ok: true as const, row };
 }

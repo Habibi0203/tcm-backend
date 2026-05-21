@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, boolean, integer, timestamp, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, boolean, integer, timestamp, primaryKey, uniqueIndex, index } from 'drizzle-orm/pg-core';
 import { accessTierEnum } from './content';
 
 export const subforums = pgTable('subforums', {
@@ -70,3 +70,26 @@ export const postingRateLimits = pgTable('posting_rate_limits', {
 }, (t) => ({
   pk: primaryKey({ columns: [t.user_id, t.action_type] }),
 }));
+
+
+export const contentReports = pgTable('content_reports', {
+  id:              uuid('id').primaryKey().defaultRandom(),
+  reporter_id:     uuid('reporter_id').notNull(),
+  target_type:     varchar('target_type', { length: 20 }).notNull(),
+  target_id:       uuid('target_id').notNull(),
+  reason:          varchar('reason', { length: 60 }).notNull(),
+  details:         text('details'),
+  status:          varchar('status', { length: 20 }).default('open').notNull(),
+  reviewed_by:     uuid('reviewed_by'),
+  reviewed_at:     timestamp('reviewed_at', { withTimezone: true }),
+  resolution_note: text('resolution_note'),
+  created_at:      timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updated_at:      timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  reporterTargetUnique: uniqueIndex('content_reports_reporter_target_unique').on(t.reporter_id, t.target_type, t.target_id),
+  statusCreatedIdx:     index('content_reports_status_created_idx').on(t.status, t.created_at),
+  targetIdx:            index('content_reports_target_idx').on(t.target_type, t.target_id),
+}));
+
+export type ContentReport    = typeof contentReports.$inferSelect;
+export type NewContentReport = typeof contentReports.$inferInsert;

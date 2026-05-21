@@ -2,12 +2,12 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { sendSuccess, sendError, ErrorCodes } from '../../utils/response';
 import { buildMeta } from '../../utils/paginate';
 import {
-  listThreadsQuerySchema, createThreadSchema, createReplySchema,
+  listThreadsQuerySchema, createThreadSchema, createReplySchema, createReportSchema,
 } from './forum.schema';
 import {
   listSubforums, getSubforumBySlug, listThreads, getThreadById, incrementThreadView,
   listReplies, checkAndTickRateLimit, createThread, createReply, upvoteReply, removeUpvote,
-  getThreadAuthor,
+  getThreadAuthor, getReplyById, createContentReport,
 } from './forum.service';
 import { createNotification } from '../users/users.service';
 
@@ -17,6 +17,7 @@ async function tryAuth(request: FastifyRequest): Promise<boolean> {
 
 const THREAD_LIMIT_PER_HOUR = 5;
 const REPLY_LIMIT_PER_HOUR  = 10;
+const REPORT_LIMIT_PER_HOUR = 8;
 
 export default async function forumRoutes(fastify: FastifyInstance) {
   // ----- GET /subforums -----
@@ -213,6 +214,53 @@ export default async function forumRoutes(fastify: FastifyInstance) {
         is_verified: false,
       },
     }, undefined, 201);
+  });
+
+
+  // ----- POST /threads/:id/report -----
+  fastify.post<{ Params: { id: string } }>('/threads/:id/report', {
+    preHandler: [fastify.authenticate],
+    schema: { tags: ['forum'], summary: 'Report a thread for moderation review' },
+  }, async (request, reply) => {
+    const t = await getThreadById(request.params.id);
+    if (!t) return sendError(reply, ErrorCodes.NOT_FOUND, 'Thread tidak ditemukan', 404);
+
+    const u = request.user;
+    if (!u.is_active) return sendError(reply, ErrorCodes.FORBIDDEN, 'Akun dinonaktifkan', 403);
+
+    const parsed = createReportSchema.safeParse(request.body);
+    if (!parsed.success) return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'Input laporan tidak valid', 422);
+
+    const rl = await checkAndTickRateLimit(u.id, 'report', REPORT_LIMIT_PER_HOUR);
+    if (!rl.allowed) return sendError(reply, ErrorCodes.RATE_LIMITED, 'Batas laporan tercapai (8/jam)', 429);
+
+    const res = await createContentReport({ reporter_id: u.id, target_type: 'thread', target_id: t.id, input: parsed.data });
+    if (!res.ok) return sendError(reply, ErrorCodes.CONFLICT, 'Konten ini sudah Anda laporkan', 409);
+
+    return sendSuccess(reply, { id: res.row.id, message: 'Laporan diterima untuk ditinjau moderator' }, undefined, 201);
+  });
+
+  // ----- POST /replies/:id/report -----
+  fastify.post<{ Params: { id: string } }>('/replies/:id/report', {
+    preHandler: [fastify.authenticate],
+    schema: { tags: ['forum'], summary: 'Report a reply for moderation review' },
+  }, async (request, reply) => {
+    const r = await getReplyById(request.params.id);
+    if (!r) return sendError(reply, ErrorCodes.NOT_FOUND, 'Balasan tidak ditemukan', 404);
+
+    const u = request.user;
+    if (!u.is_active) return sendError(reply, ErrorCodes.FORBIDDEN, 'Akun dinonaktifkan', 403);
+
+    const parsed = createReportSchema.safeParse(request.body);
+    if (!parsed.success) return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'Input laporan tidak valid', 422);
+
+    const rl = await checkAndTickRateLimit(u.id, 'report', REPORT_LIMIT_PER_HOUR);
+    if (!rl.allowed) return sendError(reply, ErrorCodes.RATE_LIMITED, 'Batas laporan tercapai (8/jam)', 429);
+
+    const res = await createContentReport({ reporter_id: u.id, target_type: 'reply', target_id: r.id, input: parsed.data });
+    if (!res.ok) return sendError(reply, ErrorCodes.CONFLICT, 'Konten ini sudah Anda laporkan', 409);
+
+    return sendSuccess(reply, { id: res.row.id, message: 'Laporan diterima untuk ditinjau moderator' }, undefined, 201);
   });
 
   // ----- POST /replies/:id/upvote -----

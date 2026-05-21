@@ -3,12 +3,20 @@ import { and, desc, eq, sql, isNull } from 'drizzle-orm';
 import { db } from '../../db/client';
 import { users, practitionerProfiles } from '../../db/schema/users';
 import { articles } from '../../db/schema/content';
-import { forumThreads } from '../../db/schema/forum';
+import { contentReports, forumReplies, forumThreads, subforums } from '../../db/schema/forum';
 import { sendSuccess, sendError, ErrorCodes } from '../../utils/response';
 import { getPaginationParams, buildMeta } from '../../utils/paginate';
 import { toPublicUser } from '../auth/auth.service';
 import { createNotification } from '../users/users.service';
 import { z } from 'zod';
+import { alias } from 'drizzle-orm/pg-core';
+
+const reviewerUsers = alias(users, 'reviewer');
+const targetThread = alias(forumThreads, 'target_thread');
+const targetThreadSubforum = alias(subforums, 'target_thread_sub');
+const targetReply = alias(forumReplies, 'target_reply');
+const replyThread = alias(forumThreads, 'reply_thread');
+const replyThreadSubforum = alias(subforums, 'reply_thread_sub');
 
 const updateArticleStatusSchema = z.object({
   status: z.enum(['draft', 'review', 'published', 'archived']),
@@ -24,6 +32,13 @@ const updateUserSchema = z.object({
 const verifyPractitionerSchema = z.object({
   is_verified:        z.boolean(),
   verification_notes: z.string().max(500).optional(),
+});
+
+const updateReportStatusSchema = z.object({
+  status: z.enum(['reviewed', 'dismissed', 'actioned']),
+  resolution_note: z.string().trim().max(1000).optional(),
+  hide_content: z.boolean().optional(),
+  lock_thread: z.boolean().optional(),
 });
 
 export default async function adminRoutes(fastify: FastifyInstance) {
@@ -232,6 +247,110 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       .where(and(eq(forumThreads.is_flagged, true), eq(forumThreads.is_deleted, false)));
 
     return sendSuccess(reply, rows.map(r => ({ ...r, created_at: r.created_at.toISOString() })), buildMeta(count, page, per_page));
+  });
+
+
+  // ----- GET /admin/reports -----
+  fastify.get('/admin/reports', {
+    schema: { tags: ['admin'], summary: 'List forum content reports' },
+  }, async (request, reply) => {
+    const q = request.query as { page?: string; per_page?: string; status?: string; target_type?: string };
+    const { page, per_page, limit, offset } = getPaginationParams({ page: q.page, per_page: q.per_page, max_per_page: 50 });
+
+    const conds = [];
+    if (q.status) conds.push(eq(contentReports.status, q.status as 'open' | 'reviewed' | 'dismissed' | 'actioned'));
+    if (q.target_type) conds.push(eq(contentReports.target_type, q.target_type as 'thread' | 'reply'));
+
+    const rows = await db
+      .select({
+        report: contentReports,
+        reporter_username: users.username,
+        reporter_display: users.display_name,
+        reviewer_username: reviewerUsers.username,
+        thread_title: sql<string | null>`COALESCE(${targetThread.title}, ${replyThread.title})`,
+        thread_id: sql<string | null>`COALESCE(${targetThread.id}, ${replyThread.id})`,
+        subforum_slug: sql<string | null>`COALESCE(${targetThreadSubforum.slug}, ${replyThreadSubforum.slug})`,
+        reply_excerpt: sql<string | null>`CASE WHEN ${contentReports.target_type} = 'reply' THEN LEFT(${targetReply.content}, 160) ELSE NULL END`,
+      })
+      .from(contentReports)
+      .leftJoin(users, eq(contentReports.reporter_id, users.id))
+      .leftJoin(reviewerUsers, eq(contentReports.reviewed_by, reviewerUsers.id))
+      .leftJoin(targetThread, and(eq(contentReports.target_type, 'thread'), eq(contentReports.target_id, targetThread.id)))
+      .leftJoin(targetThreadSubforum, eq(targetThread.subforum_id, targetThreadSubforum.id))
+      .leftJoin(targetReply, and(eq(contentReports.target_type, 'reply'), eq(contentReports.target_id, targetReply.id)))
+      .leftJoin(replyThread, eq(targetReply.thread_id, replyThread.id))
+      .leftJoin(replyThreadSubforum, eq(replyThread.subforum_id, replyThreadSubforum.id))
+      .where(conds.length ? and(...conds) : undefined)
+      .orderBy(desc(contentReports.created_at))
+      .limit(limit)
+      .offset(offset);
+
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(contentReports)
+      .where(conds.length ? and(...conds) : undefined);
+
+    return sendSuccess(reply, rows.map((r) => ({
+      ...r.report,
+      created_at:  r.report.created_at.toISOString(),
+      updated_at:  r.report.updated_at.toISOString(),
+      reviewed_at: r.report.reviewed_at ? r.report.reviewed_at.toISOString() : null,
+      reporter: {
+        username: r.reporter_username,
+        display_name: r.reporter_display,
+      },
+      reviewer: r.reviewer_username ? { username: r.reviewer_username } : null,
+      target: {
+        type: r.report.target_type,
+        id: r.report.target_id,
+        thread_id: r.thread_id,
+        thread_title: r.thread_title,
+        subforum_slug: r.subforum_slug,
+        reply_excerpt: r.reply_excerpt,
+        url: r.thread_id && r.subforum_slug ? `/forum/${r.subforum_slug}/${r.thread_id}` : null,
+      },
+    })), buildMeta(count, page, per_page));
+  });
+
+  // ----- PATCH /admin/reports/:id -----
+  fastify.patch<{ Params: { id: string } }>('/admin/reports/:id', {
+    schema: { tags: ['admin'], summary: 'Review a forum content report' },
+  }, async (request, reply) => {
+    const parsed = updateReportStatusSchema.safeParse(request.body);
+    if (!parsed.success) return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'Input tidak valid', 422);
+
+    const [row] = await db.select().from(contentReports).where(eq(contentReports.id, request.params.id)).limit(1);
+    if (!row) return sendError(reply, ErrorCodes.NOT_FOUND, 'Laporan tidak ditemukan', 404);
+
+    const now = new Date();
+    await db.update(contentReports).set({
+      status: parsed.data.status,
+      resolution_note: parsed.data.resolution_note ?? row.resolution_note,
+      reviewed_by: request.user.id,
+      reviewed_at: now,
+      updated_at: now,
+    }).where(eq(contentReports.id, request.params.id));
+
+    if (parsed.data.hide_content) {
+      if (row.target_type === 'thread') {
+        await db.update(forumThreads).set({ is_deleted: true, updated_at: now }).where(eq(forumThreads.id, row.target_id));
+      } else {
+        await db.update(forumReplies).set({ is_deleted: true, updated_at: now }).where(eq(forumReplies.id, row.target_id));
+      }
+    }
+
+    if (parsed.data.lock_thread) {
+      let threadId: string | null = row.target_type === 'thread' ? row.target_id : null;
+      if (!threadId) {
+        const [replyRow] = await db.select({ thread_id: forumReplies.thread_id }).from(forumReplies).where(eq(forumReplies.id, row.target_id)).limit(1);
+        threadId = replyRow?.thread_id ?? null;
+      }
+      if (threadId) {
+        await db.update(forumThreads).set({ is_locked: true, updated_at: now }).where(eq(forumThreads.id, threadId));
+      }
+    }
+
+    return sendSuccess(reply, { message: 'Laporan diperbarui' });
   });
 
   // ----- GET /admin/practitioners/pending -----

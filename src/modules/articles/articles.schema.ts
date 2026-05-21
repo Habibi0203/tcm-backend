@@ -5,6 +5,7 @@ export const listArticlesQuerySchema = z.object({
   slug:          z.string().trim().max(300).optional(),
   author:        z.string().uuid().optional(),
   category_slug: z.string().trim().max(120).optional(),
+  tag_slug:      z.string().trim().max(120).optional(),
   access_tier:   z.enum(['free', 'premium']).optional(),
   sort:          z.enum(['newest', 'popular', 'trending']).default('newest'),
   page:          z.coerce.number().int().min(1).default(1),

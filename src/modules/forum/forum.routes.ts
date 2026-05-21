@@ -19,6 +19,15 @@ const THREAD_LIMIT_PER_HOUR = 5;
 const REPLY_LIMIT_PER_HOUR  = 10;
 const REPORT_LIMIT_PER_HOUR = 8;
 
+function isPrivilegedForumUser(u: { role: string }) {
+  return u.role === 'admin' || u.role === 'moderator' || u.role === 'agent';
+}
+
+function containsLinkOrImage(text: string) {
+  return /https?:\/\/|www\.|<a\s|<img\s|!\[[^\]]*\]\(|\.(png|jpe?g|gif|webp)(\?|\s|$)/i.test(text);
+}
+
+
 export default async function forumRoutes(fastify: FastifyInstance) {
   // ----- GET /subforums -----
   fastify.get('/subforums', {
@@ -95,11 +104,6 @@ export default async function forumRoutes(fastify: FastifyInstance) {
       return sendError(reply, ErrorCodes.FORBIDDEN, 'Verifikasi email diperlukan sebelum membuat thread', 403);
     }
 
-    const rl = await checkAndTickRateLimit(u.id, 'thread', THREAD_LIMIT_PER_HOUR);
-    if (!rl.allowed) {
-      return sendError(reply, ErrorCodes.RATE_LIMITED, 'Batas pembuatan thread tercapai (5/jam)', 429);
-    }
-
     const parsed = createThreadSchema.safeParse(request.body);
     if (!parsed.success) {
       const fields: Record<string, string> = {};
@@ -111,6 +115,17 @@ export default async function forumRoutes(fastify: FastifyInstance) {
       return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'Persetujuan aturan jual beli wajib dicentang', 422, {
         fjb_rules_accepted: 'required',
       });
+    }
+
+    if (!isPrivilegedForumUser(u) && containsLinkOrImage(`${parsed.data.title} ${parsed.data.content}`)) {
+      return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'User baru/non-privileged belum boleh menyertakan link atau gambar di thread', 422, {
+        content: 'link_or_image_not_allowed',
+      });
+    }
+
+    const rl = await checkAndTickRateLimit(u.id, 'thread', THREAD_LIMIT_PER_HOUR);
+    if (!rl.allowed) {
+      return sendError(reply, ErrorCodes.RATE_LIMITED, 'Batas pembuatan thread tercapai (5/jam)', 429);
     }
 
     const row = await createThread({ subforum_id: sf.id, author_id: u.id, input: parsed.data });
@@ -175,13 +190,19 @@ export default async function forumRoutes(fastify: FastifyInstance) {
       return sendError(reply, ErrorCodes.FORBIDDEN, 'Verifikasi email diperlukan sebelum membalas thread', 403);
     }
 
+    const parsed = createReplySchema.safeParse(request.body);
+    if (!parsed.success) return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'Input tidak valid', 422);
+
+    if (!isPrivilegedForumUser(u) && containsLinkOrImage(parsed.data.content)) {
+      return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'User baru/non-privileged belum boleh menyertakan link atau gambar di balasan', 422, {
+        content: 'link_or_image_not_allowed',
+      });
+    }
+
     const rl = await checkAndTickRateLimit(u.id, 'reply', REPLY_LIMIT_PER_HOUR);
     if (!rl.allowed) {
       return sendError(reply, ErrorCodes.RATE_LIMITED, 'Batas balasan tercapai (10/jam)', 429);
     }
-
-    const parsed = createReplySchema.safeParse(request.body);
-    if (!parsed.success) return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'Input tidak valid', 422);
 
     const res = await createReply({ thread_id: t.id, author_id: u.id, input: parsed.data });
     if (!res.ok) {

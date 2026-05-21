@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { db } from '../../db/client';
 import {
   articles, articleComments, articleLikes, articleCommentLikes,
@@ -24,6 +24,7 @@ export type ListArticleRow = {
   created_at: string;
   category: { slug: string; name: string; color_hex: string | null } | null;
   author: { id: string; username: string; display_name: string; avatar_url: string | null };
+  tags: Array<{ id: string; name: string; slug: string }>;
 };
 
 type RawListRow = {
@@ -47,6 +48,9 @@ type RawListRow = {
   author_username: string | null;
   author_display: string | null;
   author_avatar: string | null;
+  tag_id: string | null;
+  tag_name: string | null;
+  tag_slug: string | null;
 };
 
 function shapeListRow(r: RawListRow): ListArticleRow {
@@ -74,6 +78,7 @@ function shapeListRow(r: RawListRow): ListArticleRow {
       display_name: r.author_display!,
       avatar_url:   r.author_avatar,
     },
+    tags: [],
   };
 }
 
@@ -85,9 +90,8 @@ export async function listPublishedArticles(q: ListArticlesQuery) {
   if (q.access_tier) conds.push(eq(articles.access_tier, q.access_tier));
   if (q.slug) conds.push(eq(articles.slug, q.slug));
   if (q.author) conds.push(eq(articles.author_id, q.author));
-  if (q.category_slug) {
-    conds.push(eq(categories.slug, q.category_slug));
-  }
+  if (q.category_slug) conds.push(eq(categories.slug, q.category_slug));
+  if (q.tag_slug) conds.push(eq(tags.slug, q.tag_slug));
   if (q.q) {
     const like = `%${q.q}%`;
     conds.push(or(ilike(articles.title, like), ilike(articles.excerpt, like))!);
@@ -100,7 +104,31 @@ export async function listPublishedArticles(q: ListArticlesQuery) {
 
   const offset = (q.page - 1) * q.per_page;
 
-  const rows = await db
+  const idRows = await db
+    .select({ id: articles.id })
+    .from(articles)
+    .leftJoin(categories, eq(articles.category_id, categories.id))
+    .leftJoin(articleTags, eq(articleTags.article_id, articles.id))
+    .leftJoin(tags, eq(articleTags.tag_id, tags.id))
+    .where(and(...conds))
+    .groupBy(articles.id)
+    .orderBy(orderBy)
+    .limit(q.per_page)
+    .offset(offset);
+
+  const ids = idRows.map((r) => r.id);
+
+  const [{ count }] = await db
+    .select({ count: sql<number>`count(DISTINCT ${articles.id})::int` })
+    .from(articles)
+    .leftJoin(categories, eq(articles.category_id, categories.id))
+    .leftJoin(articleTags, eq(articleTags.article_id, articles.id))
+    .leftJoin(tags, eq(articleTags.tag_id, tags.id))
+    .where(and(...conds));
+
+  if (!ids.length) return { rows: [], total: count };
+
+  const rawRows = await db
     .select({
       id:                articles.id,
       title:             articles.title,
@@ -122,22 +150,29 @@ export async function listPublishedArticles(q: ListArticlesQuery) {
       author_username:   users.username,
       author_display:    users.display_name,
       author_avatar:     users.avatar_url,
+      tag_id:            tags.id,
+      tag_name:          tags.name,
+      tag_slug:          tags.slug,
     })
     .from(articles)
     .leftJoin(categories, eq(articles.category_id, categories.id))
-    .leftJoin(users,      eq(articles.author_id,   users.id))
-    .where(and(...conds))
-    .orderBy(orderBy)
-    .limit(q.per_page)
-    .offset(offset);
+    .leftJoin(articleTags, eq(articleTags.article_id, articles.id))
+    .leftJoin(tags, eq(articleTags.tag_id, tags.id))
+    .leftJoin(users, eq(articles.author_id, users.id))
+    .where(inArray(articles.id, ids))
+    .orderBy(orderBy);
 
-  const [{ count }] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(articles)
-    .leftJoin(categories, eq(articles.category_id, categories.id))
-    .where(and(...conds));
+  const byId = new Map<string, ListArticleRow>();
+  for (const raw of rawRows) {
+    const existing = byId.get(raw.id) ?? shapeListRow(raw);
+    if (raw.tag_id && !existing.tags.some((tag) => tag.id === raw.tag_id)) {
+      existing.tags.push({ id: raw.tag_id, name: raw.tag_name!, slug: raw.tag_slug! });
+    }
+    byId.set(raw.id, existing);
+  }
 
-  return { rows: rows.map(shapeListRow), total: count };
+  const orderedRows = ids.map((id) => byId.get(id)).filter((row): row is ListArticleRow => Boolean(row));
+  return { rows: orderedRows, total: count };
 }
 
 export async function getArticleBySlug(slug: string) {

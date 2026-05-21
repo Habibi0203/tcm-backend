@@ -2,8 +2,17 @@ import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { db } from '../../db/client';
 import { subforums, forumThreads, forumReplies, forumReplyUpvotes, postingRateLimits, contentReports } from '../../db/schema/forum';
 import { notifications } from '../../db/schema/system';
-import { users } from '../../db/schema/users';
+import { practitionerProfiles, users } from '../../db/schema/users';
 import type { CreateThreadInput, ListThreadsQuery, CreateReportInput } from './forum.schema';
+
+
+type ForumModerationStatus = 'published' | 'pending' | 'hidden' | 'deleted';
+
+function forumModerationStatus(item: { is_deleted?: boolean | null; deleted_at?: Date | null; is_flagged?: boolean | null }): ForumModerationStatus {
+  if (item.is_deleted) return item.deleted_at ? 'hidden' : 'deleted';
+  if (item.is_flagged) return 'pending';
+  return 'published';
+}
 
 const DANGEROUS_MEDICAL_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
   { label: 'klaim pasti sembuh', pattern: /\b(pasti|dijamin|100\s*%)\s+(sembuh|menyembuhkan|ampuh)\b/i },
@@ -65,6 +74,8 @@ export async function listThreads(subforumId: string, q: ListThreadsQuery) {
       is_locked:       forumThreads.is_locked,
       is_flagged:      forumThreads.is_flagged,
       is_agent_seeded: forumThreads.is_agent_seeded,
+      is_deleted:      forumThreads.is_deleted,
+      deleted_at:      forumThreads.deleted_at,
       view_count:      forumThreads.view_count,
       reply_count:     forumThreads.reply_count,
       last_reply_at:   forumThreads.last_reply_at,
@@ -78,10 +89,12 @@ export async function listThreads(subforumId: string, q: ListThreadsQuery) {
       author_role:     users.role,
       author_tier:     users.membership_tier,
       author_verified: users.is_verified,
+      practitioner_verified: practitionerProfiles.is_verified,
     })
     .from(forumThreads)
     .innerJoin(subforums, eq(forumThreads.subforum_id, subforums.id))
     .leftJoin(users, eq(forumThreads.author_id, users.id))
+    .leftJoin(practitionerProfiles, eq(practitionerProfiles.user_id, users.id))
     .where(and(eq(forumThreads.subforum_id, subforumId), eq(forumThreads.is_deleted, false)))
     .orderBy(desc(forumThreads.is_pinned), orderBy)
     .limit(q.per_page)
@@ -107,6 +120,9 @@ export async function listThreads(subforumId: string, q: ListThreadsQuery) {
       is_locked:       r.is_locked,
       is_flagged:      r.is_flagged,
       is_agent_seeded: r.is_agent_seeded,
+      moderation_status: forumModerationStatus(r),
+      status:          forumModerationStatus(r),
+      deleted_at:      r.deleted_at ? r.deleted_at.toISOString() : null,
       view_count:      r.view_count,
       reply_count:     r.reply_count,
       last_reply_at:   r.last_reply_at ? r.last_reply_at.toISOString() : null,
@@ -119,6 +135,7 @@ export async function listThreads(subforumId: string, q: ListThreadsQuery) {
         role:         r.author_role!,
         membership_tier: r.author_tier!,
         is_verified:  r.author_verified,
+        practitioner_verified: Boolean(r.practitioner_verified),
       },
     })),
     total: count,
@@ -143,11 +160,13 @@ export async function getThreadById(id: string) {
         membership_tier: users.membership_tier,
         is_verified:  users.is_verified,
         profession:   users.profession,
+        practitioner_verified: practitionerProfiles.is_verified,
       },
     })
     .from(forumThreads)
     .innerJoin(subforums, eq(forumThreads.subforum_id, subforums.id))
     .leftJoin(users, eq(forumThreads.author_id, users.id))
+    .leftJoin(practitionerProfiles, eq(practitionerProfiles.user_id, users.id))
     .where(and(eq(forumThreads.id, id), eq(forumThreads.is_deleted, false)))
     .limit(1);
   const row = rows[0];
@@ -161,6 +180,9 @@ export async function getThreadById(id: string) {
     is_locked:       row.t.is_locked,
     is_flagged:      row.t.is_flagged,
     is_agent_seeded: row.t.is_agent_seeded,
+    moderation_status: forumModerationStatus(row.t),
+    status:          forumModerationStatus(row.t),
+    deleted_at:      row.t.deleted_at ? row.t.deleted_at.toISOString() : null,
     view_count:      row.t.view_count,
     reply_count:     row.t.reply_count,
     last_reply_at:   row.t.last_reply_at ? row.t.last_reply_at.toISOString() : null,
@@ -195,9 +217,12 @@ export async function listReplies(threadId: string) {
       author_tier:     users.membership_tier,
       author_verified: users.is_verified,
       author_prof:     users.profession,
+      practitioner_verified: practitionerProfiles.is_verified,
+      deleted_at:      forumReplies.deleted_at,
     })
     .from(forumReplies)
     .leftJoin(users, eq(forumReplies.author_id, users.id))
+    .leftJoin(practitionerProfiles, eq(practitionerProfiles.user_id, users.id))
     .where(and(eq(forumReplies.thread_id, threadId), eq(forumReplies.is_deleted, false)))
     .orderBy(forumReplies.created_at);
 
@@ -208,6 +233,9 @@ export async function listReplies(threadId: string) {
     content:         r.content,
     upvote_count:    r.upvote_count,
     is_agent_reply:  r.is_agent_reply,
+    moderation_status: forumModerationStatus(r),
+    status:          forumModerationStatus(r),
+    deleted_at:      r.deleted_at ? r.deleted_at.toISOString() : null,
     created_at:      r.created_at.toISOString(),
     author: {
       id:           r.author_id!,
@@ -218,6 +246,7 @@ export async function listReplies(threadId: string) {
       membership_tier: r.author_tier!,
       is_verified:  r.author_verified,
       profession:   r.author_prof,
+      practitioner_verified: Boolean(r.practitioner_verified),
     },
   }));
 }

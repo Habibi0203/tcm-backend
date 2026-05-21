@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../../db/client';
-import { articles, categories } from '../../db/schema/content';
+import { articles, categories, tags, articleTags } from '../../db/schema/content';
 import { sendSuccess, sendError, ErrorCodes } from '../../utils/response';
 import { buildMeta } from '../../utils/paginate';
 import {
@@ -64,6 +64,34 @@ export default async function articlesRoutes(fastify: FastifyInstance) {
       .where(eq(categories.is_active, true))
       .groupBy(categories.id)
       .orderBy(categories.sort_order, categories.name);
+
+    return sendSuccess(reply, rows);
+  });
+
+
+  // ----- GET /articles/tags -----
+  fastify.get('/articles/tags', {
+    schema: { tags: ['articles'], summary: 'List active article tags' },
+  }, async (_request, reply) => {
+    const rows = await db
+      .select({
+        id: tags.id,
+        name: tags.name,
+        slug: tags.slug,
+        article_count: sql<number>`count(${articles.id})::int`,
+      })
+      .from(tags)
+      .innerJoin(articleTags, eq(articleTags.tag_id, tags.id))
+      .innerJoin(
+        articles,
+        and(
+          eq(articleTags.article_id, articles.id),
+          eq(articles.status, 'published'),
+          sql`${articles.deleted_at} IS NULL`,
+        ),
+      )
+      .groupBy(tags.id)
+      .orderBy(tags.name);
 
     return sendSuccess(reply, rows);
   });

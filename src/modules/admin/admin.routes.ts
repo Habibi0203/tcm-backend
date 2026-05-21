@@ -4,6 +4,7 @@ import { db } from '../../db/client';
 import { users, practitionerProfiles } from '../../db/schema/users';
 import { articles } from '../../db/schema/content';
 import { contentReports, forumReplies, forumThreads, subforums } from '../../db/schema/forum';
+import { auditLogs } from '../../db/schema/system';
 import { sendSuccess, sendError, ErrorCodes } from '../../utils/response';
 import { getPaginationParams, buildMeta } from '../../utils/paginate';
 import { toPublicUser } from '../auth/auth.service';
@@ -40,6 +41,43 @@ const updateReportStatusSchema = z.object({
   hide_content: z.boolean().optional(),
   lock_thread: z.boolean().optional(),
 });
+
+
+async function writeAdminAuditLog(opts: {
+  user_id: string;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  request_ip?: string;
+  user_agent?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  await db.insert(auditLogs).values({
+    user_id: opts.user_id,
+    action: opts.action,
+    entity_type: opts.entity_type,
+    entity_id: opts.entity_id,
+    ip_address: opts.request_ip ?? null,
+    user_agent: opts.user_agent ?? null,
+    metadata: opts.metadata ?? {},
+  });
+}
+
+async function refreshThreadFlag(threadId: string) {
+  const [{ open_count }] = await db
+    .select({ open_count: sql<number>`count(*)::int` })
+    .from(contentReports)
+    .leftJoin(forumReplies, and(eq(contentReports.target_type, 'reply'), eq(contentReports.target_id, forumReplies.id)))
+    .where(and(
+      eq(contentReports.status, 'open'),
+      sql`(${contentReports.target_type} = 'thread' AND ${contentReports.target_id} = ${threadId} OR ${contentReports.target_type} = 'reply' AND ${forumReplies.thread_id} = ${threadId})`,
+    ));
+
+  await db.update(forumThreads).set({
+    is_flagged: open_count > 0,
+    updated_at: new Date(),
+  }).where(eq(forumThreads.id, threadId));
+}
 
 export default async function adminRoutes(fastify: FastifyInstance) {
   // All admin routes require admin or moderator role
@@ -254,12 +292,13 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   fastify.get('/admin/reports', {
     schema: { tags: ['admin'], summary: 'List forum content reports' },
   }, async (request, reply) => {
-    const q = request.query as { page?: string; per_page?: string; status?: string; target_type?: string };
+    const q = request.query as { page?: string; per_page?: string; status?: string; target_type?: string; reason?: string };
     const { page, per_page, limit, offset } = getPaginationParams({ page: q.page, per_page: q.per_page, max_per_page: 50 });
 
     const conds = [];
     if (q.status) conds.push(eq(contentReports.status, q.status as 'open' | 'reviewed' | 'dismissed' | 'actioned'));
     if (q.target_type) conds.push(eq(contentReports.target_type, q.target_type as 'thread' | 'reply'));
+    if (q.reason) conds.push(eq(contentReports.reason, q.reason));
 
     const rows = await db
       .select({
@@ -323,6 +362,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     if (!row) return sendError(reply, ErrorCodes.NOT_FOUND, 'Laporan tidak ditemukan', 404);
 
     const now = new Date();
+    let threadId: string | null = row.target_type === 'thread' ? row.target_id : null;
+    if (!threadId) {
+      const [replyRow] = await db.select({ thread_id: forumReplies.thread_id }).from(forumReplies).where(eq(forumReplies.id, row.target_id)).limit(1);
+      threadId = replyRow?.thread_id ?? null;
+    }
+
     await db.update(contentReports).set({
       status: parsed.data.status,
       resolution_note: parsed.data.resolution_note ?? row.resolution_note,
@@ -335,20 +380,47 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       if (row.target_type === 'thread') {
         await db.update(forumThreads).set({ is_deleted: true, updated_at: now }).where(eq(forumThreads.id, row.target_id));
       } else {
+        const [replyBefore] = await db
+          .select({ thread_id: forumReplies.thread_id, is_deleted: forumReplies.is_deleted })
+          .from(forumReplies)
+          .where(eq(forumReplies.id, row.target_id))
+          .limit(1);
         await db.update(forumReplies).set({ is_deleted: true, updated_at: now }).where(eq(forumReplies.id, row.target_id));
+        if (replyBefore && !replyBefore.is_deleted) {
+          await db.update(forumThreads).set({
+            reply_count: sql`GREATEST(${forumThreads.reply_count} - 1, 0)`,
+            updated_at: now,
+          }).where(eq(forumThreads.id, replyBefore.thread_id));
+        }
       }
     }
 
-    if (parsed.data.lock_thread) {
-      let threadId: string | null = row.target_type === 'thread' ? row.target_id : null;
-      if (!threadId) {
-        const [replyRow] = await db.select({ thread_id: forumReplies.thread_id }).from(forumReplies).where(eq(forumReplies.id, row.target_id)).limit(1);
-        threadId = replyRow?.thread_id ?? null;
-      }
-      if (threadId) {
-        await db.update(forumThreads).set({ is_locked: true, updated_at: now }).where(eq(forumThreads.id, threadId));
-      }
+    if (parsed.data.lock_thread && threadId) {
+      await db.update(forumThreads).set({ is_locked: true, updated_at: now }).where(eq(forumThreads.id, threadId));
     }
+
+    if (threadId) {
+      await refreshThreadFlag(threadId);
+    }
+
+    await writeAdminAuditLog({
+      user_id: request.user.id,
+      action: 'moderation_report_update',
+      entity_type: 'content_report',
+      entity_id: row.id,
+      request_ip: request.ip,
+      user_agent: request.headers['user-agent'],
+      metadata: {
+        previous_status: row.status,
+        status: parsed.data.status,
+        target_type: row.target_type,
+        target_id: row.target_id,
+        thread_id: threadId,
+        hide_content: parsed.data.hide_content ?? false,
+        lock_thread: parsed.data.lock_thread ?? false,
+        resolution_note: parsed.data.resolution_note ?? null,
+      },
+    });
 
     return sendSuccess(reply, { message: 'Laporan diperbarui' });
   });

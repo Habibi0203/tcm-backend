@@ -107,6 +107,12 @@ export default async function forumRoutes(fastify: FastifyInstance) {
       return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'Input tidak valid', 422, fields);
     }
 
+    if (sf.slug === 'fjb' && parsed.data.fjb_rules_accepted !== true) {
+      return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'Persetujuan aturan jual beli wajib dicentang', 422, {
+        fjb_rules_accepted: 'required',
+      });
+    }
+
     const row = await createThread({ subforum_id: sf.id, author_id: u.id, input: parsed.data });
     return sendSuccess(reply, { id: row.id, title: row.title, created_at: row.created_at.toISOString() }, undefined, 201);
   });

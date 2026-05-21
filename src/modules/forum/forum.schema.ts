@@ -10,6 +10,7 @@ export type ListThreadsQuery = z.infer<typeof listThreadsQuerySchema>;
 export const createThreadSchema = z.object({
   title:   z.string().min(5).max(200),
   content: z.string().min(10),
+  fjb_rules_accepted: z.boolean().optional(),
 });
 export type CreateThreadInput = z.infer<typeof createThreadSchema>;
 

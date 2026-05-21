@@ -1,8 +1,25 @@
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { db } from '../../db/client';
 import { subforums, forumThreads, forumReplies, forumReplyUpvotes, postingRateLimits, contentReports } from '../../db/schema/forum';
+import { notifications } from '../../db/schema/system';
 import { users } from '../../db/schema/users';
 import type { CreateThreadInput, ListThreadsQuery, CreateReportInput } from './forum.schema';
+
+const DANGEROUS_MEDICAL_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
+  { label: 'klaim pasti sembuh', pattern: /\b(pasti|dijamin|100\s*%)\s+(sembuh|menyembuhkan|ampuh)\b/i },
+  { label: 'stop terapi dokter', pattern: /\b(stop|hentikan|berhenti)\s+(obat|terapi|pengobatan|kemoterapi|insulin|antibiotik)\b/i },
+  { label: 'klaim kanker berat', pattern: /\b(sembuh|menyembuhkan|obat)\s+(kanker|tumor|stroke|diabetes|gagal ginjal)\b/i },
+  { label: 'tanpa efek samping absolut', pattern: /\b(tanpa efek samping|aman 100\s*%|pasti aman)\b/i },
+  { label: 'anti dokter', pattern: /\b(tidak perlu|tak perlu)\s+(dokter|rumah sakit|medis)\b/i },
+];
+
+export function detectDangerousMedicalClaims(text: string) {
+  const normalized = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return DANGEROUS_MEDICAL_PATTERNS
+    .filter((item) => item.pattern.test(normalized))
+    .map((item) => item.label);
+}
+
 
 export async function listSubforums() {
   const rows = await db
@@ -88,6 +105,7 @@ export async function listThreads(subforumId: string, q: ListThreadsQuery) {
       },
       is_pinned:       r.is_pinned,
       is_locked:       r.is_locked,
+      is_flagged:      r.is_flagged,
       is_agent_seeded: r.is_agent_seeded,
       view_count:      r.view_count,
       reply_count:     r.reply_count,
@@ -239,11 +257,14 @@ export async function checkAndTickRateLimit(userId: string, actionType: 'thread'
 }
 
 export async function createThread(opts: { subforum_id: string; author_id: string; input: CreateThreadInput; is_agent_seeded?: boolean }) {
+  const safetyMatches = detectDangerousMedicalClaims(`${opts.input.title} ${opts.input.content}`);
+
   const [row] = await db.insert(forumThreads).values({
     subforum_id:     opts.subforum_id,
     author_id:       opts.author_id,
     title:           opts.input.title,
     content:         opts.input.content,
+    is_flagged:      safetyMatches.length > 0,
     is_agent_seeded: opts.is_agent_seeded ?? false,
     last_reply_at:   new Date(),
   }).returning();
@@ -253,10 +274,22 @@ export async function createThread(opts: { subforum_id: string; author_id: strin
     last_activity_at: new Date(),
   }).where(eq(subforums.id, opts.subforum_id));
 
+  if (safetyMatches.length > 0) {
+    await createAutoContentReport({
+      target_type: 'thread',
+      target_id: row.id,
+      reason: 'medical_claim',
+      details: `Deteksi otomatis: ${safetyMatches.join(', ')}`,
+      safety_matches: safetyMatches,
+    });
+  }
+
   return row;
 }
 
 export async function createReply(opts: { thread_id: string; author_id: string; input: { content: string; parent_reply_id?: string | null }; is_agent_reply?: boolean }) {
+  const safetyMatches = detectDangerousMedicalClaims(opts.input.content);
+
   // Enforce 1-level nesting: parent_reply_id must itself be top-level (parent null)
   if (opts.input.parent_reply_id) {
     const parent = await db
@@ -289,8 +322,19 @@ export async function createReply(opts: { thread_id: string; author_id: string; 
     await db.update(subforums).set({ last_activity_at: now }).where(eq(subforums.id, t.subforum_id));
   }
 
+  if (safetyMatches.length > 0) {
+    await createAutoContentReport({
+      target_type: 'reply',
+      target_id: row.id,
+      reason: 'medical_claim',
+      details: `Deteksi otomatis: ${safetyMatches.join(', ')}`,
+      safety_matches: safetyMatches,
+    });
+  }
+
   return { ok: true as const, row };
 }
+
 
 export async function upvoteReply(replyId: string, userId: string) {
   const inserted = await db
@@ -352,6 +396,8 @@ export async function createContentReport(opts: {
       target_id:   opts.target_id,
       reason:      opts.input.reason,
       details:     opts.input.details?.trim() || null,
+      auto_detected: false,
+      safety_matches: null,
     })
     .onConflictDoNothing()
     .returning();
@@ -367,5 +413,66 @@ export async function createContentReport(opts: {
     }
   }
 
+  await notifyModeratorsOfReport(row.id, opts.target_type, opts.target_id, opts.input.reason, false).catch(() => undefined);
+
   return { ok: true as const, row };
+}
+
+async function createAutoContentReport(opts: {
+  target_type: 'thread' | 'reply';
+  target_id: string;
+  reason: 'medical_claim';
+  details: string;
+  safety_matches: string[];
+}) {
+  const [existing] = await db
+    .select({ id: contentReports.id })
+    .from(contentReports)
+    .where(and(
+      eq(contentReports.target_type, opts.target_type),
+      eq(contentReports.target_id, opts.target_id),
+      eq(contentReports.auto_detected, true),
+    ))
+    .limit(1);
+
+  if (existing) return null;
+
+  const [row] = await db.insert(contentReports).values({
+    reporter_id: null,
+    target_type: opts.target_type,
+    target_id: opts.target_id,
+    reason: opts.reason,
+    details: opts.details,
+    auto_detected: true,
+    safety_matches: opts.safety_matches,
+  }).returning();
+
+  if (opts.target_type === 'thread') {
+    await db.update(forumThreads).set({ is_flagged: true, updated_at: new Date() }).where(eq(forumThreads.id, opts.target_id));
+  } else {
+    const reply = await getReplyById(opts.target_id);
+    if (reply) {
+      await db.update(forumThreads).set({ is_flagged: true, updated_at: new Date() }).where(eq(forumThreads.id, reply.thread_id));
+    }
+  }
+
+  await notifyModeratorsOfReport(row.id, opts.target_type, opts.target_id, opts.reason, true).catch(() => undefined);
+  return row;
+}
+
+async function notifyModeratorsOfReport(reportId: string, targetType: 'thread' | 'reply', targetId: string, reason: string, autoDetected: boolean) {
+  const moderators = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(sql`${users.role} IN ('admin', 'moderator')`, eq(users.is_active, true)));
+
+  if (!moderators.length) return;
+
+  await db.insert(notifications).values(moderators.map((u) => ({
+    user_id: u.id,
+    type: 'system' as const,
+    title: autoDetected ? 'Konten otomatis ditandai' : 'Laporan moderasi baru',
+    body: `${autoDetected ? 'Deteksi otomatis' : 'Laporan user'}: ${reason} pada ${targetType}.`,
+    link: `/dashboard?tab=moderasi&report=${reportId}&target=${targetType}:${targetId}`,
+  })));
 }

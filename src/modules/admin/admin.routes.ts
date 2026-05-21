@@ -40,6 +40,7 @@ const updateReportStatusSchema = z.object({
   resolution_note: z.string().trim().max(1000).optional(),
   hide_content: z.boolean().optional(),
   lock_thread: z.boolean().optional(),
+  deletion_reason: z.string().trim().max(500).optional(),
 });
 
 
@@ -70,7 +71,7 @@ async function refreshThreadFlag(threadId: string) {
     .leftJoin(forumReplies, and(eq(contentReports.target_type, 'reply'), eq(contentReports.target_id, forumReplies.id)))
     .where(and(
       eq(contentReports.status, 'open'),
-      sql`(${contentReports.target_type} = 'thread' AND ${contentReports.target_id} = ${threadId} OR ${contentReports.target_type} = 'reply' AND ${forumReplies.thread_id} = ${threadId})`,
+      sql`((${contentReports.target_type} = 'thread' AND ${contentReports.target_id} = ${threadId}) OR (${contentReports.target_type} = 'reply' AND ${forumReplies.thread_id} = ${threadId}))`,
     ));
 
   await db.update(forumThreads).set({
@@ -292,13 +293,15 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   fastify.get('/admin/reports', {
     schema: { tags: ['admin'], summary: 'List forum content reports' },
   }, async (request, reply) => {
-    const q = request.query as { page?: string; per_page?: string; status?: string; target_type?: string; reason?: string };
+    const q = request.query as { page?: string; per_page?: string; status?: string; target_type?: string; reason?: string; auto_detected?: string };
     const { page, per_page, limit, offset } = getPaginationParams({ page: q.page, per_page: q.per_page, max_per_page: 50 });
 
     const conds = [];
     if (q.status) conds.push(eq(contentReports.status, q.status as 'open' | 'reviewed' | 'dismissed' | 'actioned'));
     if (q.target_type) conds.push(eq(contentReports.target_type, q.target_type as 'thread' | 'reply'));
     if (q.reason) conds.push(eq(contentReports.reason, q.reason));
+    if (q.auto_detected === 'true') conds.push(eq(contentReports.auto_detected, true));
+    if (q.auto_detected === 'false') conds.push(eq(contentReports.auto_detected, false));
 
     const rows = await db
       .select({
@@ -378,14 +381,26 @@ export default async function adminRoutes(fastify: FastifyInstance) {
 
     if (parsed.data.hide_content) {
       if (row.target_type === 'thread') {
-        await db.update(forumThreads).set({ is_deleted: true, updated_at: now }).where(eq(forumThreads.id, row.target_id));
+        await db.update(forumThreads).set({
+          is_deleted: true,
+          deleted_at: now,
+          deleted_by: request.user.id,
+          deletion_reason: parsed.data.deletion_reason ?? parsed.data.resolution_note ?? 'Moderasi konten',
+          updated_at: now,
+        }).where(eq(forumThreads.id, row.target_id));
       } else {
         const [replyBefore] = await db
           .select({ thread_id: forumReplies.thread_id, is_deleted: forumReplies.is_deleted })
           .from(forumReplies)
           .where(eq(forumReplies.id, row.target_id))
           .limit(1);
-        await db.update(forumReplies).set({ is_deleted: true, updated_at: now }).where(eq(forumReplies.id, row.target_id));
+        await db.update(forumReplies).set({
+          is_deleted: true,
+          deleted_at: now,
+          deleted_by: request.user.id,
+          deletion_reason: parsed.data.deletion_reason ?? parsed.data.resolution_note ?? 'Moderasi konten',
+          updated_at: now,
+        }).where(eq(forumReplies.id, row.target_id));
         if (replyBefore && !replyBefore.is_deleted) {
           await db.update(forumThreads).set({
             reply_count: sql`GREATEST(${forumThreads.reply_count} - 1, 0)`,
@@ -419,6 +434,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         hide_content: parsed.data.hide_content ?? false,
         lock_thread: parsed.data.lock_thread ?? false,
         resolution_note: parsed.data.resolution_note ?? null,
+        deletion_reason: parsed.data.deletion_reason ?? null,
+        auto_detected: row.auto_detected,
       },
     });
 

@@ -50,7 +50,6 @@ export async function buildApp() {
 
   await fastify.register(fastifyJwt, {
     secret: config.JWT_SECRET,
-    cookie: { cookieName: 'refresh_token', signed: false },
   });
 
   await fastify.register(fastifyMultipart, {

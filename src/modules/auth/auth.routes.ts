@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { and, eq, isNull, gt } from 'drizzle-orm';
 import { db } from '../../db/client';
 import { users } from '../../db/schema/users';
@@ -26,23 +26,54 @@ function signAccess(fastify: FastifyInstance, u: { id: string; email: string; us
 }
 
 function signRefresh(fastify: FastifyInstance, u: { id: string; email: string; username: string; role: string; membership_tier: string }) {
-  return (fastify as FastifyInstance & { jwt: { sign: (p: object, o?: object) => string } })
-    .jwt.sign(
-      { id: u.id, email: u.email, username: u.username, role: u.role, membership_tier: u.membership_tier, kind: 'refresh' },
-      { expiresIn: JWT_EXPIRY.REFRESH, key: config.JWT_REFRESH_SECRET } as unknown as object,
-    );
+  return fastify.jwt.sign(
+    { id: u.id, email: u.email, username: u.username, role: u.role, membership_tier: u.membership_tier, kind: 'refresh' },
+    { expiresIn: JWT_EXPIRY.REFRESH, key: config.JWT_REFRESH_SECRET } as unknown as object,
+  );
 }
 
-function setRefreshCookie(reply: Parameters<FastifyInstance['decorateReply']>[1] extends never ? never : Parameters<FastifyInstance['addSchema']>[0], token: string) {
-  // actual typed below via fastify instance helpers
-  return token;
+function verifyRefresh(fastify: FastifyInstance, token: string) {
+  return fastify.jwt.verify(token, { key: config.JWT_REFRESH_SECRET } as unknown as object) as {
+    id: string;
+    email: string;
+    username: string;
+    role: string;
+    membership_tier: string;
+    kind?: string;
+  };
+}
+
+function setRefreshCookie(reply: FastifyReply, token: string) {
+  reply.setCookie(REFRESH_COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: REFRESH_COOKIE_MAX_AGE,
+    secure: config.NODE_ENV === 'production',
+  });
+}
+
+function clearRefreshCookie(reply: FastifyReply) {
+  reply.clearCookie(REFRESH_COOKIE_NAME, {
+    path: '/',
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: config.NODE_ENV === 'production',
+  });
+}
+
+function isPrivileged(role: string) {
+  return role === 'admin' || role === 'moderator' || role === 'agent';
 }
 
 export default async function authRoutes(fastify: FastifyInstance) {
   // ── Per-endpoint rate limits (override global 200/min) ────────────────────
-  const loginRateLimit    = { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } };
-  const registerRateLimit = { config: { rateLimit: { max: 5,  timeWindow: '1 hour'     } } };
-  const forgotRateLimit   = { config: { rateLimit: { max: 3,  timeWindow: '1 hour'     } } };
+  const loginRateLimit    = { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } };
+  const registerRateLimit = { config: { rateLimit: { max: 3, timeWindow: '1 hour'     } } };
+  const forgotRateLimit   = { config: { rateLimit: { max: 3, timeWindow: '1 hour'     } } };
+  const resetRateLimit    = { config: { rateLimit: { max: 5, timeWindow: '1 hour'     } } };
+  const refreshRateLimit  = { config: { rateLimit: { max: 30, timeWindow: '15 minutes' } } };
+  const verifyRateLimit   = { config: { rateLimit: { max: 10, timeWindow: '1 hour'    } } };
 
   // ----- REGISTER -----
   fastify.post('/auth/register', {
@@ -83,12 +114,8 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
     const payload = { id: user.id, email: user.email, username: user.username, role: user.role, membership_tier: user.membership_tier };
     const access_token = signAccess(fastify, payload);
-    const refresh_token = fastify.jwt.sign(payload as Parameters<typeof fastify.jwt.sign>[0], { expiresIn: JWT_EXPIRY.REFRESH });
-
-    reply.setCookie(REFRESH_COOKIE_NAME, refresh_token, {
-      httpOnly: true, sameSite: 'lax', path: '/', maxAge: REFRESH_COOKIE_MAX_AGE,
-      secure: config.NODE_ENV === 'production',
-    });
+    const refresh_token = signRefresh(fastify, payload);
+    setRefreshCookie(reply, refresh_token);
 
     return sendSuccess(reply, { ...toPublicUser(user), access_token }, undefined, 201);
   });
@@ -138,12 +165,8 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
     const payload = { id: user.id, email: user.email, username: user.username, role: user.role, membership_tier: user.membership_tier };
     const access_token = signAccess(fastify, payload);
-    const refresh_token = fastify.jwt.sign(payload as Parameters<typeof fastify.jwt.sign>[0], { expiresIn: JWT_EXPIRY.REFRESH });
-
-    reply.setCookie(REFRESH_COOKIE_NAME, refresh_token, {
-      httpOnly: true, sameSite: 'lax', path: '/', maxAge: REFRESH_COOKIE_MAX_AGE,
-      secure: config.NODE_ENV === 'production',
-    });
+    const refresh_token = signRefresh(fastify, payload);
+    setRefreshCookie(reply, refresh_token);
 
     return sendSuccess(reply, { ...toPublicUser(user), access_token });
   });
@@ -151,6 +174,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
   // ----- REFRESH -----
   fastify.post('/auth/refresh', {
     schema: { tags: ['auth'], summary: 'Rotate refresh token' },
+    ...refreshRateLimit,
   }, async (request, reply) => {
     const token = request.cookies[REFRESH_COOKIE_NAME];
     if (!token) {
@@ -160,9 +184,9 @@ export default async function authRoutes(fastify: FastifyInstance) {
     if (blacklisted) {
       return sendError(reply, ErrorCodes.UNAUTHORIZED, 'Refresh token tidak valid', 401);
     }
-    let decoded: { id: string; email: string; username: string; role: string; membership_tier: string };
+    let decoded: { id: string; email: string; username: string; role: string; membership_tier: string; kind?: string };
     try {
-      decoded = fastify.jwt.verify(token) as typeof decoded;
+      decoded = verifyRefresh(fastify, token);
     } catch {
       return sendError(reply, ErrorCodes.UNAUTHORIZED, 'Refresh token tidak valid', 401);
     }
@@ -171,18 +195,17 @@ export default async function authRoutes(fastify: FastifyInstance) {
     await fastify.redis.set(`refresh_blacklist:${token}`, '1', 'EX', REFRESH_COOKIE_MAX_AGE);
 
     const user = await findUserById(decoded.id);
-    if (!user || !user.is_active) {
+    if (!user || !user.is_active || decoded.kind !== 'refresh') {
       return sendError(reply, ErrorCodes.UNAUTHORIZED, 'User tidak valid', 401);
+    }
+    if (!user.is_verified && !isPrivileged(user.role)) {
+      return sendError(reply, ErrorCodes.FORBIDDEN, 'Email belum diverifikasi', 403);
     }
 
     const payload = { id: user.id, email: user.email, username: user.username, role: user.role, membership_tier: user.membership_tier };
     const access_token = signAccess(fastify, payload);
-    const refresh_token = fastify.jwt.sign(payload as Parameters<typeof fastify.jwt.sign>[0], { expiresIn: JWT_EXPIRY.REFRESH });
-
-    reply.setCookie(REFRESH_COOKIE_NAME, refresh_token, {
-      httpOnly: true, sameSite: 'lax', path: '/', maxAge: REFRESH_COOKIE_MAX_AGE,
-      secure: config.NODE_ENV === 'production',
-    });
+    const refresh_token = signRefresh(fastify, payload);
+    setRefreshCookie(reply, refresh_token);
 
     return sendSuccess(reply, { access_token });
   });
@@ -195,7 +218,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
     if (token) {
       await fastify.redis.set(`refresh_blacklist:${token}`, '1', 'EX', REFRESH_COOKIE_MAX_AGE);
     }
-    reply.clearCookie(REFRESH_COOKIE_NAME, { path: '/' });
+    clearRefreshCookie(reply);
     return sendSuccess(reply, { message: 'Berhasil logout' });
   });
 
@@ -251,6 +274,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
   fastify.post('/auth/verify-email', {
     schema: { tags: ['auth'], summary: 'Verify email by token' },
+    ...verifyRateLimit,
   }, async (request, reply) => {
     const parsed = verifyEmailSchema.safeParse(request.body);
     if (!parsed.success) return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'Input tidak valid', 422);
@@ -304,6 +328,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
   // ----- RESET PASSWORD -----
   fastify.post('/auth/reset-password', {
     schema: { tags: ['auth'], summary: 'Reset password via token' },
+    ...resetRateLimit,
   }, async (request, reply) => {
     const parsed = resetPasswordSchema.safeParse(request.body);
     if (!parsed.success) return sendError(reply, ErrorCodes.VALIDATION_ERROR, 'Input tidak valid', 422);
@@ -318,6 +343,11 @@ export default async function authRoutes(fastify: FastifyInstance) {
       .limit(1);
     const row = rows[0];
     if (!row) return sendError(reply, ErrorCodes.NOT_FOUND, 'Token reset tidak valid atau kedaluwarsa', 404);
+
+    const user = await findUserById(row.user_id);
+    if (!user || !user.is_active) {
+      return sendError(reply, ErrorCodes.NOT_FOUND, 'Token reset tidak valid atau kedaluwarsa', 404);
+    }
 
     await setPasswordHash(row.user_id, parsed.data.new_password);
     await db.update(passwordResetTokens).set({ used_at: new Date() }).where(eq(passwordResetTokens.id, row.id));
@@ -352,6 +382,3 @@ export default async function authRoutes(fastify: FastifyInstance) {
     return sendError(reply, ErrorCodes.INTERNAL_ERROR, 'Google OAuth callback belum terkonfigurasi di lingkungan ini', 501);
   });
 }
-
-// Swallow the dummy helper so TS doesn't warn
-export { setRefreshCookie };

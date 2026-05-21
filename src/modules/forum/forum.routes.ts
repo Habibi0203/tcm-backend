@@ -87,6 +87,13 @@ export default async function forumRoutes(fastify: FastifyInstance) {
       }
     }
 
+    if (!u.is_active) {
+      return sendError(reply, ErrorCodes.FORBIDDEN, 'Akun dinonaktifkan', 403);
+    }
+    if (!u.is_verified && u.role !== 'admin' && u.role !== 'moderator' && u.role !== 'agent') {
+      return sendError(reply, ErrorCodes.FORBIDDEN, 'Verifikasi email diperlukan sebelum membuat thread', 403);
+    }
+
     const rl = await checkAndTickRateLimit(u.id, 'thread', THREAD_LIMIT_PER_HOUR);
     if (!rl.allowed) {
       return sendError(reply, ErrorCodes.RATE_LIMITED, 'Batas pembuatan thread tercapai (5/jam)', 429);
@@ -152,6 +159,13 @@ export default async function forumRoutes(fastify: FastifyInstance) {
       if (!isPrivileged && u.membership_tier !== 'premium') {
         return sendError(reply, ErrorCodes.PREMIUM_REQUIRED, 'Butuh membership premium', 403);
       }
+    }
+
+    if (!u.is_active) {
+      return sendError(reply, ErrorCodes.FORBIDDEN, 'Akun dinonaktifkan', 403);
+    }
+    if (!u.is_verified && u.role !== 'admin' && u.role !== 'moderator' && u.role !== 'agent') {
+      return sendError(reply, ErrorCodes.FORBIDDEN, 'Verifikasi email diperlukan sebelum membalas thread', 403);
     }
 
     const rl = await checkAndTickRateLimit(u.id, 'reply', REPLY_LIMIT_PER_HOUR);

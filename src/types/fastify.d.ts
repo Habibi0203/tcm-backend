@@ -9,6 +9,7 @@ declare module 'fastify' {
       role: 'member' | 'moderator' | 'admin' | 'agent';
       membership_tier: 'free' | 'premium';
       is_active?: boolean;
+      is_verified?: boolean;
     };
     isAgent: boolean;
   }
@@ -29,6 +30,7 @@ declare module '@fastify/jwt' {
       username: string;
       role: string;
       membership_tier: string;
+      kind?: 'access' | 'refresh';
     };
     user: {
       id: string;
@@ -37,6 +39,7 @@ declare module '@fastify/jwt' {
       role: 'member' | 'moderator' | 'admin' | 'agent';
       membership_tier: 'free' | 'premium';
       is_active?: boolean;
+      is_verified?: boolean;
     };
   }
 }

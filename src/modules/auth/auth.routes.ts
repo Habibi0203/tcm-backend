@@ -12,7 +12,7 @@ import {
 import {
   findUserByEmail, findUserByUsername, createUser,
   createEmailVerification, createPasswordReset, verifyPassword,
-  updateLastLogin, setIsVerified, setPasswordHash, toPublicUser, findUserById,
+  updateLastLogin, setIsVerified, setPasswordHash, toPublicUserWithInterests, findUserById,
 } from './auth.service';
 import { JWT_EXPIRY, REFRESH_COOKIE_NAME, REFRESH_COOKIE_MAX_AGE } from '../../utils/token';
 import { config } from '../../config';
@@ -117,7 +117,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
     const refresh_token = signRefresh(fastify, payload);
     setRefreshCookie(reply, refresh_token);
 
-    return sendSuccess(reply, { ...toPublicUser(user), access_token }, undefined, 201);
+    return sendSuccess(reply, { ...(await toPublicUserWithInterests(user)), access_token }, undefined, 201);
   });
 
   // ----- LOGIN -----
@@ -168,7 +168,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
     const refresh_token = signRefresh(fastify, payload);
     setRefreshCookie(reply, refresh_token);
 
-    return sendSuccess(reply, { ...toPublicUser(user), access_token });
+    return sendSuccess(reply, { ...(await toPublicUserWithInterests(user)), access_token });
   });
 
   // ----- REFRESH -----

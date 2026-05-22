@@ -5,7 +5,7 @@ import {
   listThreadsQuerySchema, createThreadSchema, createReplySchema, createReportSchema,
 } from './forum.schema';
 import {
-  listSubforums, getSubforumBySlug, listThreads, getThreadById, incrementThreadView,
+  listSubforums, getSubforumBySlug, listThreads, listLatestThreads, getThreadById, incrementThreadView,
   listReplies, checkAndTickRateLimit, createThread, createReply, upvoteReply, removeUpvote,
   getThreadAuthor, getReplyById, createContentReport,
 } from './forum.service';
@@ -130,6 +130,17 @@ export default async function forumRoutes(fastify: FastifyInstance) {
 
     const row = await createThread({ subforum_id: sf.id, author_id: u.id, input: parsed.data });
     return sendSuccess(reply, { id: row.id, title: row.title, created_at: row.created_at.toISOString() }, undefined, 201);
+  });
+
+
+  // ----- GET /threads/latest -----
+  fastify.get('/threads/latest', {
+    schema: { tags: ['forum'], summary: 'Latest public community threads' },
+  }, async (request, reply) => {
+    const q = request.query as { per_page?: string };
+    const limit = Number.parseInt(q.per_page ?? '5', 10);
+    const rows = await listLatestThreads(Number.isFinite(limit) ? limit : 5);
+    return sendSuccess(reply, rows);
   });
 
   // ----- GET /threads/:id -----

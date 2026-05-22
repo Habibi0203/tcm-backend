@@ -1,6 +1,6 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../../db/client';
-import { users } from '../../db/schema/users';
+import { users, userInterests } from '../../db/schema/users';
 import { bookmarks, notifications } from '../../db/schema/system';
 import { articles, categories } from '../../db/schema/content';
 import { forumThreads, subforums } from '../../db/schema/forum';
@@ -12,8 +12,27 @@ export async function updateMe(userId: string, input: UpdateMeInput) {
   if (input.display_name !== undefined) patch.display_name = input.display_name;
   if (input.bio          !== undefined) patch.bio          = input.bio;
   if (input.avatar_url   !== undefined) patch.avatar_url   = input.avatar_url;
+  if (input.profession   !== undefined) patch.profession   = input.profession;
   const [row] = await db.update(users).set(patch).where(eq(users.id, userId)).returning();
+  if (input.interests !== undefined) {
+    await setUserInterests(userId, input.interests);
+  }
   return row;
+}
+
+export async function setUserInterests(userId: string, interests: string[]) {
+  const unique = Array.from(new Set(interests));
+  await db.delete(userInterests).where(eq(userInterests.user_id, userId));
+  if (unique.length === 0) return;
+  await db.insert(userInterests).values(unique.map((interest) => ({ user_id: userId, interest })));
+}
+
+export async function listUserInterestsForProfile(userId: string) {
+  const rows = await db
+    .select({ interest: userInterests.interest })
+    .from(userInterests)
+    .where(eq(userInterests.user_id, userId));
+  return rows.map((r) => r.interest);
 }
 
 export async function changePassword(userId: string, newPlain: string) {

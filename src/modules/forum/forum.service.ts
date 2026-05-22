@@ -142,6 +142,78 @@ export async function listThreads(subforumId: string, q: ListThreadsQuery) {
   };
 }
 
+
+export async function listLatestThreads(limit = 5) {
+  const safeLimit = Math.min(Math.max(limit, 1), 20);
+  const rows = await db
+    .select({
+      id:              forumThreads.id,
+      subforum_id:     forumThreads.subforum_id,
+      title:           forumThreads.title,
+      is_pinned:       forumThreads.is_pinned,
+      is_locked:       forumThreads.is_locked,
+      is_flagged:      forumThreads.is_flagged,
+      is_deleted:      forumThreads.is_deleted,
+      deleted_at:      forumThreads.deleted_at,
+      view_count:      forumThreads.view_count,
+      reply_count:     forumThreads.reply_count,
+      last_reply_at:   forumThreads.last_reply_at,
+      created_at:      forumThreads.created_at,
+      subforum_name:   subforums.name,
+      subforum_slug:   subforums.slug,
+      author_id:       users.id,
+      author_username: users.username,
+      author_display:  users.display_name,
+      author_avatar:   users.avatar_url,
+      author_role:     users.role,
+      author_tier:     users.membership_tier,
+      author_verified: users.is_verified,
+      practitioner_verified: practitionerProfiles.is_verified,
+    })
+    .from(forumThreads)
+    .innerJoin(subforums, eq(forumThreads.subforum_id, subforums.id))
+    .leftJoin(users, eq(forumThreads.author_id, users.id))
+    .leftJoin(practitionerProfiles, eq(practitionerProfiles.user_id, users.id))
+    .where(and(
+      eq(forumThreads.is_deleted, false),
+      eq(subforums.is_active, true),
+      eq(subforums.access_tier, 'free'),
+    ))
+    .orderBy(desc(forumThreads.last_reply_at), desc(forumThreads.created_at))
+    .limit(safeLimit);
+
+  return rows.map(r => ({
+    id:              r.id,
+    subforum_id:     r.subforum_id,
+    title:           r.title,
+    subforum: {
+      id:   r.subforum_id,
+      name: r.subforum_name,
+      slug: r.subforum_slug,
+    },
+    is_pinned:       r.is_pinned,
+    is_locked:       r.is_locked,
+    is_flagged:      r.is_flagged,
+    moderation_status: forumModerationStatus(r),
+    status:          forumModerationStatus(r),
+    deleted_at:      r.deleted_at ? r.deleted_at.toISOString() : null,
+    view_count:      r.view_count,
+    reply_count:     r.reply_count,
+    last_reply_at:   r.last_reply_at ? r.last_reply_at.toISOString() : null,
+    created_at:      r.created_at.toISOString(),
+    author: r.author_id ? {
+      id:           r.author_id,
+      username:     r.author_username!,
+      display_name: r.author_display!,
+      avatar_url:   r.author_avatar,
+      role:         r.author_role!,
+      membership_tier: r.author_tier!,
+      is_verified:  r.author_verified,
+      practitioner_verified: Boolean(r.practitioner_verified),
+    } : null,
+  }));
+}
+
 export async function getThreadById(id: string) {
   const rows = await db
     .select({

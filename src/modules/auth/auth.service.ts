@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../../db/client';
-import { users, type User } from '../../db/schema/users';
+import { users, userInterests, type User } from '../../db/schema/users';
 import { emailVerifications, passwordResetTokens } from '../../db/schema/auth';
 import { hashPassword, comparePassword } from '../../utils/hash';
 import { generateVerificationToken, generateResetToken, TOKEN_EXPIRY } from '../../utils/token';
@@ -18,10 +18,12 @@ export type PublicUser = {
   membership_tier: string;
   is_verified: boolean;
   is_active: boolean;
+  interests: string[];
+  onboarding_completed: boolean;
   created_at: string;
 };
 
-export function toPublicUser(u: User): PublicUser {
+export function toPublicUser(u: User, interests: string[] = []): PublicUser {
   return {
     id: u.id,
     email: u.email,
@@ -34,8 +36,24 @@ export function toPublicUser(u: User): PublicUser {
     membership_tier: u.membership_tier,
     is_verified: u.is_verified,
     is_active: u.is_active,
+    interests,
+    onboarding_completed: interests.length > 0 || Boolean(u.bio),
     created_at: u.created_at.toISOString(),
   };
+}
+
+
+export async function listUserInterests(userId: string) {
+  const rows = await db
+    .select({ interest: userInterests.interest })
+    .from(userInterests)
+    .where(eq(userInterests.user_id, userId));
+  return rows.map((r) => r.interest);
+}
+
+export async function toPublicUserWithInterests(u: User): Promise<PublicUser> {
+  const interests = await listUserInterests(u.id);
+  return toPublicUser(u, interests);
 }
 
 export async function findUserByEmail(email: string) {

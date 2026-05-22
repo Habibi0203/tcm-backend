@@ -4,14 +4,14 @@ import { db } from '../../db/client';
 import { articles } from '../../db/schema/content';
 import { sendSuccess, sendError, ErrorCodes } from '../../utils/response';
 import { getPaginationParams, buildMeta } from '../../utils/paginate';
-import { findUserById, toPublicUser, verifyPassword } from '../auth/auth.service';
+import { findUserById, toPublicUserWithInterests, verifyPassword } from '../auth/auth.service';
 import {
   updateMeSchema, changePasswordSchema,
 } from './users.schema';
 import {
   updateMe, changePassword, findPublicUserByUsername, listPublicThreadsByUsername,
   listBookmarks, addBookmark, removeBookmark,
-  listNotifications, markAllNotificationsRead, markNotificationRead,
+  listNotifications, markAllNotificationsRead, markNotificationRead, listUserInterestsForProfile,
 } from './users.service';
 
 export default async function usersRoutes(fastify: FastifyInstance) {
@@ -22,7 +22,7 @@ export default async function usersRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     const user = await findUserById(request.user.id);
     if (!user) return sendError(reply, ErrorCodes.NOT_FOUND, 'User tidak ditemukan', 404);
-    return sendSuccess(reply, toPublicUser(user));
+    return sendSuccess(reply, await toPublicUserWithInterests(user));
   });
 
   // ----- PATCH /me -----
@@ -38,7 +38,7 @@ export default async function usersRoutes(fastify: FastifyInstance) {
     }
     const updated = await updateMe(request.user.id, parsed.data);
     if (!updated) return sendError(reply, ErrorCodes.NOT_FOUND, 'User tidak ditemukan', 404);
-    return sendSuccess(reply, toPublicUser(updated));
+    return sendSuccess(reply, await toPublicUserWithInterests(updated));
   });
 
   // ----- PATCH /me/password -----
@@ -94,6 +94,7 @@ export default async function usersRoutes(fastify: FastifyInstance) {
       membership_tier: user.membership_tier,
       is_verified:  user.is_verified,
       is_active:    user.is_active,
+      interests:    await listUserInterestsForProfile(user.id),
       created_at:   user.created_at.toISOString(),
     });
   });

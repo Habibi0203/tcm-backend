@@ -229,7 +229,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       .from(users)
       .where(conds.length ? and(...conds) : undefined);
 
-    return sendSuccess(reply, rows.map(toPublicUser), buildMeta(count, page, per_page));
+    return sendSuccess(reply, rows.map((row) => toPublicUser(row)), buildMeta(count, page, per_page));
   });
 
   // ----- PATCH /admin/users/:id -----

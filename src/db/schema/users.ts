@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, boolean, timestamp, pgEnum, integer } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, boolean, timestamp, pgEnum, integer, primaryKey } from 'drizzle-orm/pg-core';
 
 export const professionEnum     = pgEnum('profession_type', ['general', 'practitioner', 'student']);
 export const roleEnum           = pgEnum('user_role',       ['member', 'moderator', 'admin', 'agent']);
@@ -42,3 +42,13 @@ export const practitionerProfiles = pgTable('practitioner_profiles', {
 
 export type PractitionerProfile    = typeof practitionerProfiles.$inferSelect;
 export type NewPractitionerProfile = typeof practitionerProfiles.$inferInsert;
+
+export const userInterests = pgTable('user_interests', {
+  user_id:    uuid('user_id').notNull(),
+  interest:   varchar('interest', { length: 64 }).notNull(),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.user_id, t.interest] }),
+}));
+
+export type UserInterest = typeof userInterests.$inferSelect;
